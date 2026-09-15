@@ -1,0 +1,10 @@
+{
+  "project": "Inventory management",
+  "site_name": "재고현황 및 재고분석",
+  "schema_version": "1.0.0",
+  "database": "postgresql",
+  "persistent_files": "/app/user_data",
+  "timezone_display": "Asia/Seoul",
+  "backup_policy": "AI SPACE 프로젝트 백업과 PostgreSQL 덤프를 함께 보관"
+}
+
