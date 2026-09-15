@@ -139,6 +139,9 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+    if not app.config.get("TESTING") and not missing and not os.getenv("SECRET_KEY"):
+        from runtime_security import session_secret
+        app.config["SECRET_KEY"] = session_secret()
     db.init_app(app)
     csrf.init_app(app)
     login_manager.init_app(app)
@@ -159,6 +162,8 @@ def create_app(test_config=None):
 
     register_routes(app)
     register_errors(app)
+    from expiry_feature import register_expiry
+    register_expiry(app, db, audit, roles)
     app.jinja_env.filters["kst"] = lambda value: value.astimezone(KST).strftime("%Y-%m-%d %H:%M") if value else "-"
     app.jinja_env.filters["num"] = lambda value: f"{float(value or 0):,.0f}"
 
@@ -176,20 +181,22 @@ def load_user(user_id):
 def initialize_database():
     try:
         with db.engine.begin() as conn:
-            conn.execute(text("SELECT pg_advisory_lock(73190421)"))
-            try:
-                db.metadata.create_all(bind=conn)
-            finally:
-                conn.execute(text("SELECT pg_advisory_unlock(73190421)"))
+            conn.execute(text("SELECT pg_advisory_xact_lock(73190421)"))
+            db.metadata.create_all(bind=conn)
+        db.session.execute(text("SELECT pg_advisory_xact_lock(73190421)"))
         if db.session.scalar(select(func.count(User.id))) == 0:
             admin_id = os.getenv("BOOTSTRAP_ADMIN_ID")
             admin_password = os.getenv("BOOTSTRAP_ADMIN_PASSWORD")
             admin_name = os.getenv("BOOTSTRAP_ADMIN_NAME", "시스템관리자")
+            if not admin_id or not admin_password:
+                from runtime_security import bootstrap_credentials
+                credentials = bootstrap_credentials()
+                admin_id, admin_password = credentials['login_id'], credentials['password']
             if admin_id and admin_password:
                 admin = User(login_id=admin_id.casefold(), name=admin_name, role="admin", must_change_password=True)
                 admin.set_password(admin_password)
                 db.session.add(admin)
-                db.session.commit()
+        db.session.commit()
     except SQLAlchemyError:
         db.session.rollback()
 
@@ -285,6 +292,8 @@ def register_routes(app):
             else:
                 current_user.set_password(password); current_user.must_change_password = False
                 audit("password_changed", target_type="user", target_id=current_user.id, commit=False); db.session.commit()
+                from runtime_security import remove_bootstrap_credentials
+                remove_bootstrap_credentials(current_user.login_id)
                 flash("비밀번호가 변경되었습니다.", "success"); return redirect(url_for("dashboard"))
         return render_template("password.html", first=current_user.must_change_password)
 

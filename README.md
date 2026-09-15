@@ -12,7 +12,7 @@ MedPark 사내용 재고관리 웹 애플리케이션입니다. Flask/Gunicorn/P
 
 ## 운영 설정
 
-AI SPACE가 제공하는 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`가 모두 필요합니다. `SECRET_KEY`와 최초 관리자용 환경변수는 AI SPACE에서 별도로 설정합니다. 실제 비밀번호나 DB 접속정보는 저장소에 기록하지 않습니다.
+AI SPACE가 제공하는 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`가 모두 필요합니다. `SECRET_KEY`가 없다면 `/app/user_data/private/session.json`에 무작위 세션키를 최초 한 번 생성하고 모든 작업자가 공유합니다. 최초 관리자용 환경변수가 없다면 임시 관리자 `admin`과 무작위 비밀번호를 생성합니다. 초기 비밀번호는 서버의 보호된 `/app/user_data/private/bootstrap-admin.json`에만 기록하며 최초 비밀번호 변경 시 삭제됩니다. 이 파일은 소유자의 프로젝트 백업으로만 확인하고 공개 웹 경로에 노출하지 않습니다. 실제 비밀번호나 DB 접속정보는 저장소에 기록하지 않습니다.
 
 시작 명령:
 
@@ -22,3 +22,19 @@ gunicorn --workers 2 --threads 4 --timeout 120 --bind 0.0.0.0:${PORT:-8000} app:
 
 서버 시작 시 PostgreSQL advisory lock으로 초기 스키마 처리를 직렬화합니다. 사용자 테이블이 비어 있을 때만 부트스트랩 관리자를 생성합니다.
 
+## 유효기간 초안 (space10)
+
+- `/expiry/`: 날짜별 ERP 재고 조회, 창고·공장·상태·품번·LOT 검색, CSV 출력
+- ERP 재고·품번 마스터·유효기간 규칙·MTS 사용기한·LOT 예외를 열 제목 포함 TSV로 붙여넣기
+- 미리보기 후 확정. 재고는 스냅샷으로 보존하고 기준정보는 KEY별 추가·수정하며 누락된 기존 KEY는 유지
+- 1·2공장은 ICUBE 품번 앞 4자리와 뒤 2자리로 규칙을 찾고 생산일 + 유효일수 − 1일 계산
+- 기존 XBP LOT만 4~9자리 날짜 사용. 그 외 생산일 LOT는 3~8자리 날짜 사용
+- 3공장은 품번 앞 4자리 규칙과 MTS 제품구분+앞 8자리 LOT로 연결. MTS 사용기한을 그대로 사용
+- 같은 제품구분·LOT에 사용기한이 충돌하거나 기준정보가 없으면 날짜를 생성하지 않고 확인사항 표시
+- 기본 화면 알림은 잔여 90·180·365일 미만. 일수는 편집자가 변경 가능. 이메일·메신저 발송 없음
+- admin/editor 등록·수정, viewer 조회. CSRF, 등록자 제한, 중복 확정 방지, 기준정보 변경 감지, 감사 기록
+- 기존 품목·입출고 테이블에는 쓰지 않음. `expiry_references`, `expiry_imports`만 추가
+
+로컬 확인: `python3 -m pytest -q`. 워크플로 테스트는 격리된 메모리 데이터베이스를 사용하므로 PostgreSQL advisory lock의 실제 동작은 운영 연결 후 별도 확인해야 합니다. 운영 저장소는 PostgreSQL만 사용합니다.
+
+실제 재고·품번 마스터·MTS 파일은 공개 GitHub에 커밋하지 않습니다. 사이트 등록 화면으로 입력합니다. 현재 별도 ERP API 연동은 없습니다.
