@@ -1,0 +1,2 @@
+PostgreSQL 스키마 변경 이력을 보관합니다. 초기 운영은 앱 시작 시 PostgreSQL advisory lock 안에서 idempotent create_all을 실행하며, 이후 구조 변경은 Alembic revision으로 관리합니다.
+
