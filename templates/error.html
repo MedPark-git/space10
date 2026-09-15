@@ -1,0 +1,2 @@
+{% extends 'base.html' %}{% block page_title %}오류{% endblock %}{% block content %}<section class="error-card"><strong>{{ code }}</strong><h1>{{ title }}</h1><p>{{ message }}</p><a class="primary button" href="{{ url_for('dashboard') if current_user.is_authenticated else url_for('login') }}">기본 화면으로</a></section>{% endblock %}
+
