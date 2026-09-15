@@ -4,6 +4,27 @@ import json
 import os
 from pathlib import Path
 import secrets
+import base64
+
+
+def existing_bootstrap_credentials():
+    path = Path(os.getenv('RUNTIME_PRIVATE_DIR', '/app/user_data/private')) / 'bootstrap-admin.json'
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+
+
+def bootstrap_envelope(credentials, public_key_pem):
+    """Encrypt only to the deployment owner's configured key, never a request key."""
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+    key = serialization.load_pem_public_key(public_key_pem.encode('ascii'))
+    if not isinstance(key, rsa.RSAPublicKey) or key.key_size < 3072:
+        raise ValueError('A deployment RSA public key of at least 3072 bits is required')
+    ciphertext = key.encrypt(json.dumps(credentials).encode('utf-8'), padding.OAEP(
+        mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None))
+    return {'algorithm': 'RSA-OAEP-SHA256', 'ciphertext': base64.b64encode(ciphertext).decode('ascii')}
 
 
 def private_settings(filename, factory, directory=None):

@@ -12,7 +12,7 @@ MedPark 사내용 재고관리 웹 애플리케이션입니다. Flask/Gunicorn/P
 
 ## 운영 설정
 
-AI SPACE가 제공하는 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`가 모두 필요합니다. `SECRET_KEY`가 없다면 `/app/user_data/private/session.json`에 무작위 세션키를 최초 한 번 생성하고 모든 작업자가 공유합니다. 최초 관리자용 환경변수가 없다면 임시 관리자 `admin`과 무작위 비밀번호를 생성합니다. 초기 비밀번호는 서버의 보호된 `/app/user_data/private/bootstrap-admin.json`에만 기록하며 최초 비밀번호 변경 시 삭제됩니다. 이 파일은 소유자의 프로젝트 백업으로만 확인하고 공개 웹 경로에 노출하지 않습니다. 실제 비밀번호나 DB 접속정보는 저장소에 기록하지 않습니다.
+AI SPACE가 제공하는 `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`가 모두 필요합니다. `SECRET_KEY`가 없다면 `/app/user_data/private/session.json`에 무작위 세션키를 최초 한 번 생성하고 모든 작업자가 공유합니다. 최초 관리자용 환경변수가 없다면 임시 관리자 `admin`과 무작위 비밀번호를 생성합니다. 초기 비밀번호는 서버의 보호된 `/app/user_data/private/bootstrap-admin.json`에만 기록하며 최초 비밀번호 변경 시 삭제됩니다. 비밀번호 평문은 공개 웹 경로에 노출하지 않습니다. 최초 인계가 필요하면 배포 소유자의 RSA 공개키(3072비트 이상)를 `BOOTSTRAP_DELIVERY_PUBLIC_KEY`에 설정하고 `/setup/bootstrap-envelope`에서 RSA-OAEP-SHA256 암호문을 받아 소유자의 개인키로 복호화할 수 있습니다. 공개키는 요청으로 받지 않으며 관리자 최초 로그인 전·비밀번호 일치 시에만 동작합니다. 인계 직후 공개키 설정을 삭제해 경로를 비활성화합니다. 개인키와 평문 접속정보는 저장소에 넣지 않습니다. 실제 비밀번호나 DB 접속정보는 저장소에 기록하지 않습니다.
 
 시작 명령:
 

@@ -146,6 +146,7 @@ def create_app(test_config=None):
     csrf.init_app(app)
     login_manager.init_app(app)
     login_manager.login_view = "login"
+    login_manager.login_message = "로그인 후 이용해 주세요."
 
     @app.before_request
     def enforce_idle_session():
@@ -176,6 +177,14 @@ def create_app(test_config=None):
 @login_manager.user_loader
 def load_user(user_id):
     return db.session.get(User, user_id)
+
+
+@login_manager.unauthorized_handler
+def require_authentication():
+    if request.path.startswith("/api/"):
+        return jsonify(error="authentication_required"), 401
+    flash("로그인 후 이용해 주세요.", "message")
+    return redirect(url_for("login", next=request.full_path.rstrip("?")))
 
 
 def initialize_database():
@@ -227,6 +236,29 @@ def form_value(name, default=""):
 
 
 def register_routes(app):
+    @app.get("/setup/bootstrap-envelope")
+    def initial_admin_envelope():
+        public_key = os.getenv("BOOTSTRAP_DELIVERY_PUBLIC_KEY")
+        if not public_key:
+            abort(404)
+        from runtime_security import existing_bootstrap_credentials, bootstrap_envelope
+        credentials = existing_bootstrap_credentials()
+        if not credentials:
+            abort(404)
+        user = db.session.scalar(select(User).where(User.login_id == credentials.get("login_id")))
+        if (not user or user.role != "admin" or not user.is_active_account
+                or not user.must_change_password or user.last_login_at is not None
+                or not check_password_hash(user.password_hash, credentials.get("password", ""))):
+            abort(404)
+        try:
+            envelope = bootstrap_envelope(credentials, public_key)
+        except (ValueError, TypeError):
+            abort(404)
+        response = jsonify(envelope)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
     @app.get("/health")
     def health():
         result = {"status": "error", "database": False, "database_backend": "postgresql", "database_writable": False, "application_ready": False}

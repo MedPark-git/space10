@@ -116,3 +116,36 @@ def test_csrf_and_alert_validation(web):
     assert response.status_code==302
     app.config['WTF_CSRF_ENABLED']=True
     assert client.post('/expiry/import/mapping',data={'data':'bad'}).status_code==400
+
+
+def test_unauthenticated_api_returns_json_and_ui_requires_login(web):
+    _, client = web
+    response = client.get('/api/items')
+    assert response.status_code == 401 and response.json == {'error': 'authentication_required'}
+    assert client.get('/expiry/').status_code == 302
+
+
+def test_admin_envelope_is_initial_only_and_disabled_without_config(web, tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from runtime_security import private_settings
+    _, client = web
+    monkeypatch.setenv('RUNTIME_PRIVATE_DIR', str(tmp_path))
+    monkeypatch.delenv('BOOTSTRAP_DELIVERY_PUBLIC_KEY', raising=False)
+    assert client.get('/setup/bootstrap-envelope').status_code == 404
+    key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    public = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    monkeypatch.setenv('BOOTSTRAP_DELIVERY_PUBLIC_KEY', public)
+    assert client.get('/setup/bootstrap-envelope').status_code == 404
+    private_settings('bootstrap-admin.json', lambda: {'login_id':'admin', 'password':'isolated-password-29'})
+    assert client.get('/setup/bootstrap-envelope').status_code == 404  # password already changed
+    user = db.session.get(User, 'admin'); user.must_change_password = True; db.session.commit()
+    response = client.get('/setup/bootstrap-envelope')
+    assert response.status_code == 200 and response.headers['Cache-Control'] == 'no-store'
+    assert 'password' not in response.get_data(as_text=True)
+    user = db.session.get(User, 'admin'); user.last_login_at = datetime.now(timezone.utc); db.session.commit()
+    assert client.get('/setup/bootstrap-envelope').status_code == 404
+    user = db.session.get(User, 'admin'); user.last_login_at = None; user.set_password('changed-password-79'); db.session.commit()
+    assert client.get('/setup/bootstrap-envelope').status_code == 404
+    monkeypatch.delenv('BOOTSTRAP_DELIVERY_PUBLIC_KEY')
+    assert client.get('/setup/bootstrap-envelope').status_code == 404
