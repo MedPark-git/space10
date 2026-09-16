@@ -189,6 +189,7 @@ def register_expiry(app, db, audit, roles):
                     (request.args.get("zero") == "1" or number(r["quantity"]) != 0)
                     and in_bucket(r)
                     and (not request.args.get("warehouse") or r["warehouse"] == request.args["warehouse"])
+                    and (not request.args.get("location") or (r.get("location") or "") == request.args["location"])
                     and (not request.args.get("factory") or r["factory"] == request.args["factory"])
                     and (not request.args.get("status") or r["status"] == request.args["status"])
                     and (not q or any(q in str(r.get(k, "")).casefold() for k in ("erp", "icube", "name", "spec", "lot", "warehouse", "location")))]
@@ -314,6 +315,67 @@ def register_expiry(app, db, audit, roles):
         results.sort(key=lambda group: (group["expired"], group["due90"], group["issues"], group["total"]), reverse=True)
         return results[:limit]
 
+    def risk_location_groups(rows, refs, bucket_key, limit=12):
+        """Break a headline risk quantity into product/spec and physical stock locations."""
+        bucket_labels = dict(bucket_definitions)
+        label = bucket_labels[bucket_key]
+        groups = {}
+        for row in rows:
+            if not is_positive_ea(row) or action_bucket(row) != label:
+                continue
+            warehouse = row.get("warehouse") or "미지정"
+            location = row.get("location") or "장소 미지정"
+            spec = row.get("spec") or "규격 미등록"
+            key = (row["erp"], row["name"], spec, warehouse, location)
+            classification, _ = warehouse_classification(warehouse, refs)
+            group = groups.setdefault(key, {
+                "erp": row["erp"], "icube": row.get("icube"), "name": row["name"], "spec": spec,
+                "warehouse": warehouse, "location": location, "classification": classification,
+                "quantity": number(0), "lot_keys": set(), "nearest": None, "nearest_expiry": None,
+                "error": None,
+            })
+            group["quantity"] += number(row["quantity"])
+            group["lot_keys"].add((row["erp"], row.get("lot") or (warehouse, location)))
+            if row.get("remaining") is not None and (group["nearest"] is None or row["remaining"] < group["nearest"]):
+                group["nearest"] = row["remaining"]
+                group["nearest_expiry"] = row.get("expiry")
+            if row.get("error") and not group["error"]:
+                group["error"] = row["error"]
+        results = []
+        for group in groups.values():
+            group["lots"] = len(group.pop("lot_keys"))
+            results.append(group)
+        results.sort(key=lambda group: (group["quantity"], group["lots"]), reverse=True)
+        return results[:limit]
+
+    def inventory_location_groups(rows, refs, limit=20):
+        """Show actual stock as one row per product/spec/warehouse/location/unit."""
+        groups = {}
+        for row in rows:
+            if number(row["quantity"]) <= 0:
+                continue
+            warehouse = row.get("warehouse") or "미지정"
+            location = row.get("location") or "장소 미지정"
+            spec = row.get("spec") or "규격 미등록"
+            unit = (row.get("unit") or "단위 미확인").strip() or "단위 미확인"
+            key = (warehouse, location, row["erp"], row["name"], spec, unit)
+            classification, _ = warehouse_classification(warehouse, refs)
+            group = groups.setdefault(key, {
+                "erp": row["erp"], "icube": row.get("icube"), "name": row["name"], "spec": spec,
+                "warehouse": warehouse, "location": location, "unit": unit,
+                "classification": classification, "quantity": number(0), "lot_keys": set(),
+            })
+            group["quantity"] += number(row["quantity"])
+            group["lot_keys"].add((row["erp"], row.get("lot") or (warehouse, location)))
+        results = []
+        order = {"available": 0, "unavailable": 1, "unclassified": 2}
+        for group in groups.values():
+            group["lots"] = len(group.pop("lot_keys"))
+            results.append(group)
+        results.sort(key=lambda group: (order[group["classification"]], group["warehouse"],
+                                        -float(group["quantity"]), group["name"], group["spec"]))
+        return results[:limit]
+
     def inventory_product_groups(rows, refs):
         groups = {}
         for row in rows:
@@ -348,8 +410,9 @@ def register_expiry(app, db, audit, roles):
         total_stats = inventory_stat(active)
         quality = data_quality_stats(active)
         availability = availability_stats(active, refs)
-        product_risks = product_risk_groups(active, refs)
-        inventory_preview = inventory_product_groups(active, refs)[:10]
+        expired_breakdown = risk_location_groups(active, refs, "expired")
+        due90_breakdown = risk_location_groups(active, refs, "due90")
+        inventory_locations = inventory_location_groups(active, refs)
         availability_labels = {"available": "가용재고", "unavailable": "비가용재고", "unclassified": "분류 필요"}
         for row in active:
             row["availability"], row["availability_source"] = warehouse_classification(row.get("warehouse"), refs)
@@ -373,7 +436,8 @@ def register_expiry(app, db, audit, roles):
                                metrics={"expired": bucket_map["expired"], "due90": bucket_map["due90"],
                                         "unresolved": bucket_map["issue"], "total": total_stats},
                                buckets=buckets, priority=priority, quality=quality, warehouse_risk=warehouse_risk[:8],
-                               availability=availability, product_risks=product_risks, inventory_preview=inventory_preview,
+                               availability=availability, expired_breakdown=expired_breakdown,
+                               due90_breakdown=due90_breakdown, inventory_locations=inventory_locations,
                                ref_counts={kind: len(refs.get(kind, {})) for kind in FORMATS if kind != "stock"})
 
     @bp.get("/inventory-location")
