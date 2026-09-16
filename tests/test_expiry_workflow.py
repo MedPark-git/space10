@@ -104,7 +104,7 @@ def test_operational_pages_use_expiry_snapshot_and_never_show_nonproducts(web):
         assert 'PRODUCT_ACTION' in body or url == '/expiry/stock-history'
         assert 'SEMI_HIDDEN' not in body
     dashboard = client.get('/expiry/dashboard?as_of=2027-03-01').get_data(as_text=True)
-    assert '조치 우선 LOT 상세' in dashboard and '품목·규격별 유효기간 위험' in dashboard and '부적합창고' in dashboard
+    assert '조치 우선 LOT 상세' in dashboard and '만료·오늘 만료 상세' in dashboard and '부적합창고' in dashboard
     analysis = client.get('/expiry/analysis?as_of=2027-03-01').get_data(as_text=True)
     assert '품목·규격별 우선 검토' in analysis and '2 EA' in analysis
     history = client.get('/expiry/stock-history').get_data(as_text=True)
@@ -157,10 +157,14 @@ def test_product_spec_location_and_available_warehouse_classification(web):
     commit(client, preview(client, 'stock', stock, '2027-03-01'))
 
     dashboard = client.get('/expiry/dashboard?as_of=2027-03-01').get_data(as_text=True)
-    assert '품목·규격별 유효기간 위험' in dashboard
+    assert '만료·오늘 만료 상세' in dashboard and '90일 이내 상세' in dashboard
+    assert '창고별 제품 재고 현황' in dashboard
     assert '임플란트A' in dashboard and '4.0×10' in dashboard
-    assert '완제품 창고 / A-01' in dashboard and '3공장 완제품 창고 / B-02' in dashboard
+    assert '완제품 창고' in dashboard and 'A-01' in dashboard
+    assert '3공장 완제품 창고' in dashboard and 'B-02' in dashboard
     assert '가용재고' in dashboard and '15 EA' in dashboard and '분류 필요' in dashboard and '7 EA' in dashboard
+    assert dashboard.count('10 EA') >= 1 and dashboard.count('5 EA') >= 1
+    assert 'bucket=expired&amp;warehouse=%EC%99%84%EC%A0%9C%ED%92%88+%EC%B0%BD%EA%B3%A0&amp;location=A-01&amp;q=P1' in dashboard
 
     location = client.get('/expiry/inventory-location?as_of=2027-03-01').get_data(as_text=True)
     assert '품목·규격별 재고 요약' in location and '창고·장소별 LOT 상세' in location
