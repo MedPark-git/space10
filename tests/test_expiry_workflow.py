@@ -64,7 +64,7 @@ def test_snapshot_preview_commit_idempotency_and_routes(web):
     app,client=web;login(client)
     commit(client,preview(client,'mapping','아마란스 품번\tICUBE 품번\n0001\t11BC025-01'))
     commit(client,preview(client,'rules','KEY값\tKEY값2\t유효기간\n11BC\t01\t3'))
-    pending=preview(client,'stock','창고\t장소\t품번\t품명\tLOT No.\t기말재고\t재고단위\n창고\tA\t0001\t=HYPERLINK(1)\tXB240229C1001\t1.25\tEA','2026-09-15')
+    pending=preview(client,'stock','창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\t재고단위\n창고\tA\t0001\t=HYPERLINK(1)\t제품\tXB240229C1001\t1.25\tEA','2026-09-15')
     Import=app.extensions['expiry_models']['Import']
     assert db.session.get(Import,pending).committed_at is None
     assert client.get('/expiry/preview/'+pending).status_code==200
@@ -134,3 +134,51 @@ def test_admin_delivery_route_is_closed_after_handoff(web, tmp_path, monkeypatch
     user = db.session.get(User, 'admin'); user.must_change_password = True; db.session.commit()
     assert client.get('/setup/bootstrap-envelope').status_code == 404
     assert client.get('/setup/bootstrap-envelope?verification=closed').status_code == 404
+
+
+def test_finished_product_scope_applies_to_preview_dashboard_csv_and_old_snapshots(web):
+    app, client = web; login(client)
+    source = ('창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\t재고단위\n'
+              '부적합창고\tA\tP1\tPRODUCT_VISIBLE\t제품\t240039SA\t2.5\tEA\n'
+              '부적합창고\tA\tS1\tSEMI_EXCLUDED\t반제품\tBAD\t100\tEA\n'
+              '다른창고\tA\tU1\tUNKNOWN_EXCLUDED\t\tBAD\t300\tEA')
+    pending = preview(client, 'stock', source, '2026-09-16')
+    html = client.get('/expiry/preview/'+pending).get_data(as_text=True)
+    assert 'PRODUCT_VISIBLE' in html and 'SEMI_EXCLUDED' not in html and 'UNKNOWN_EXCLUDED' not in html
+    commit(client, pending)
+    Import = app.extensions['expiry_models']['Import']
+    assert len(db.session.get(Import, pending).payload) == 3  # Preserve original input for audit.
+    for url in ['/expiry/', '/expiry/?zero=1', '/expiry/export.csv']:
+        body = client.get(url).get_data(as_text=True)
+        assert 'PRODUCT_VISIBLE' in body and 'SEMI_EXCLUDED' not in body and 'UNKNOWN_EXCLUDED' not in body
+    exported = client.get('/expiry/export.csv').get_data(as_text=True)
+    assert '계정구분,LOT' in exported
+    saved = db.session.get(Import, pending)
+    saved.payload = [{'key':'legacy', 'data':{k:v for k,v in saved.payload[0]['data'].items() if k != 'account'}}]
+    db.session.commit()
+    html = client.get('/expiry/').get_data(as_text=True)
+    assert '계정구분 열을 포함해 재고를 다시 등록' in html and 'PRODUCT_VISIBLE' not in html
+    assert 'PRODUCT_VISIBLE' not in client.get('/expiry/export.csv').get_data(as_text=True)
+
+
+def test_factory_3_suffix_and_common_rules_can_be_registered_together(web):
+    app, client = web; login(client)
+    source = ('공장\t앞자리 KEY\t끝자리 KEY\t유효일수\tMTS 제품구분\n'
+              '3\t39FD\t*\t1095\tS GEN\n3\t39FD\t12\t1095\tHAHA GEN')
+    pending = preview(client, 'rules', source)
+    commit(client, pending)
+    Reference = app.extensions['expiry_models']['Reference']
+    assert {r.key for r in db.session.scalars(select(Reference))} == {'39FD|*', '39FD|12'}
+    response = client.post('/expiry/import/rules', data={'data':'공장\t앞자리 KEY\t끝자리 KEY\t유효일수\tMTS 제품구분\n1·2\t39FD\t01\t1095\t'})
+    assert response.status_code == 200 and '충돌'.encode() in response.data
+
+
+def test_nonproduct_only_snapshot_replaces_previous_product_view_without_showing_semifinished(web):
+    _, client = web; login(client)
+    source = '창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\nA\tB\t1\tOLD_PRODUCT\t제품\tBAD\t1'
+    commit(client, preview(client, 'stock', source, '2026-09-15'))
+    source = source.replace('OLD_PRODUCT', 'SEMI_ONLY').replace('제품', '반제품')
+    commit(client, preview(client, 'stock', source, '2026-09-16'))
+    html = client.get('/expiry/').get_data(as_text=True)
+    assert 'OLD_PRODUCT' not in html and 'SEMI_ONLY' not in html
+    assert '조회 조건에 맞는 재고가 없습니다' in html

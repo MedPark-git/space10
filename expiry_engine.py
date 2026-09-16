@@ -12,7 +12,7 @@ class InputError(ValueError):
 
 
 FORMATS = {
-    "stock": ("ERP 재고", "사업장\t창고\t장소\t품번\t품명\t규격\t재고단위\tLOT No.\t기말재고"),
+    "stock": ("ERP 재고", "사업장\t창고\t장소\t품번\t품명\t규격\t재고단위\t계정구분\tLOT No.\t기말재고"),
     "mapping": ("품번 마스터", "아마란스 품번\tICUBE 품번"),
     "rules": ("유효기간 규칙", "공장\t앞자리 KEY\t끝자리 KEY\t유효일수\tMTS 제품구분"),
     "mts": ("MTS 사용기한", "제품명\t제조번호\t사용기한"),
@@ -22,6 +22,17 @@ FORMATS = {
 
 def clean(value):
     return str(value or "").strip().lstrip("\ufeff")
+
+
+def is_finished_product(row):
+    return clean(row.get("account")) == "제품"
+
+
+def stock_scope(entries):
+    products = [e for e in entries if is_finished_product(e["data"])]
+    return products, {"원본 행": len(entries), "집계 대상 제품": len(products),
+                      "제품 외 제외": sum(bool(clean(e["data"].get("account"))) and not is_finished_product(e["data"]) for e in entries),
+                      "계정구분 미확인 제외": sum(not clean(e["data"].get("account")) for e in entries)}
 
 
 def iso_date(value):
@@ -61,10 +72,10 @@ def parse_paste(kind, source):
         "아마란스": "아마란스 품번", "아마란스품번": "아마란스 품번",
         "아이큐브": "ICUBE 품번", "아이큐브 품번": "ICUBE 품번", "i-cube 품번": "ICUBE 품번",
         "KEY값": "앞자리 KEY", "KEY값2": "끝자리 KEY", "MTS 사용기한": "사용기한",
-        "MTS 제조번호": "제조번호", "LOT": "LOT No.", "제품구분": "제품명",
+        "MTS 제조번호": "제조번호", "LOT": "LOT No.", "제품구분": "제품명", "계정 구분": "계정구분",
     }
     required = {
-        "stock": {"창고", "장소", "품번", "품명", "LOT No.", "기말재고"},
+        "stock": {"창고", "장소", "품번", "품명", "계정구분", "LOT No.", "기말재고"},
         "mapping": {"아마란스 품번", "ICUBE 품번"},
         "rules": {"앞자리 KEY", "끝자리 KEY"},
         "mts": {"제품명", "제조번호", "사용기한"},
@@ -98,7 +109,7 @@ def parse_paste(kind, source):
             if kind == "stock":
                 if not d["품번"] or not d["품명"] or not d["창고"]:
                     raise InputError("품번·품명·창고가 필요합니다.")
-                payload = {"erp": d["품번"], "name": d["품명"], "lot": d["LOT No."].upper(),
+                payload = {"erp": d["품번"], "name": d["품명"], "account": d["계정구분"], "lot": d["LOT No."].upper(),
                            "warehouse": d["창고"], "location": d["장소"], "business": d.get("사업장", ""),
                            "spec": d.get("규격", ""), "unit": d.get("재고단위", ""), "quantity": str(number(d["기말재고"]))}
                 key = str(lineno)  # Preserve source rows, including zero quantities and identical records.
@@ -115,10 +126,10 @@ def parse_paste(kind, source):
                 prefix, suffix = d["앞자리 KEY"].upper(), d["끝자리 KEY"].upper()
                 if not re.fullmatch(r"[A-Z0-9]{4}", prefix):
                     raise InputError("앞자리 KEY는 영문·숫자 4자리입니다.")
-                if factory == "3":
+                if factory == "3" and not suffix:
                     suffix = "*"
-                elif not re.fullmatch(r"[A-Z0-9]{2}", suffix):
-                    raise InputError("1·2공장 끝자리 KEY는 영문·숫자 2자리입니다.")
+                if not re.fullmatch(r"[A-Z0-9]{2}", suffix) and not (factory == "3" and suffix == "*"):
+                    raise InputError("끝자리 KEY는 영문·숫자 2자리입니다. 3공장 공통 규칙만 * 또는 빈칸을 사용하세요.")
                 days = number(d["유효일수"]) if d.get("유효일수") else number(d.get("유효기간")) * 365
                 if days != int(days) or not 1 <= days <= 36500:
                     raise InputError("유효일수는 1~36,500의 정수로 입력해 주세요.")
@@ -157,6 +168,8 @@ def parse_paste(kind, source):
         if actual != reported_total:
             raise InputError(f"기말재고 합계가 일치하지 않습니다. 원본 합계 {reported_total}, 읽은 합계 {actual}")
         notes["기말재고 합계 일치"] = 1
+    if kind == "stock":
+        notes.update(stock_scope(entries)[1])
     return entries, dict(notes)
 
 
@@ -167,17 +180,39 @@ def index_mts(refs):
     return dict(refs, mts_by_lot=by_lot)
 
 
+def normalized_product(value):
+    value = re.sub(r"[\s_-]+", " ", clean(value).upper())
+    # Only the equivalence confirmed by the owner is automatic; other brands use explicit aliases.
+    return re.sub(r"(?<![A-Z0-9])(?:HAHA\s*GEN|S\s*GEN|하하겐)(?![A-Z0-9])", "S GEN", value)
+
+
+def has_tibialis(value):
+    return bool(re.search(r"(?<![A-Z0-9])TIBIALIS(?![A-Z0-9])", normalized_product(value)))
+
+
 def product_matches(product, key):
-    # Short Latin groups such as CP/HD must be a complete token, not part of SHD.
-    if re.fullmatch(r'[A-Z]{1,3}', key):
-        return bool(re.search(r'(?<![A-Z0-9])' + re.escape(key) + r'(?![A-Z0-9])', product))
-    return key in product
+    product = normalized_product(product)
+    for alias in key.split("|"):
+        alias = normalized_product(alias)
+        if not alias:
+            continue
+        if "S GEN" in alias:
+            # Plain and injectable products must never match each other's MTS dates.
+            inject = r"(?<![A-Z0-9])INJECT(?![A-Z0-9])"
+            if bool(re.search(inject, product)) != bool(re.search(inject, alias)):
+                continue
+        if re.search(r"(?<![A-Z0-9])" + re.escape(alias) + r"(?![A-Z0-9])", product):
+            return True
+    return False
 
 
 def calculate(row, refs, as_of, thresholds=(90, 180, 365)):
     result = dict(row, icube="", expiry=None, remaining=None, status="확인 필요", error="", source="", factory="")
     def fail(message):
         result["error"] = message
+        return result
+    if not is_finished_product(row):
+        result.update(status="집계 제외", source="계정구분이 제품인 재고만 집계합니다.")
         return result
     if not row["lot"]:
         return fail("LOT 없음")
@@ -188,9 +223,13 @@ def calculate(row, refs, as_of, thresholds=(90, 180, 365)):
     result["icube"] = icube
     rules = refs.get("rules", {})
     exact, family = rules.get(icube[:4] + "|" + icube[-2:]), rules.get(icube[:4] + "|*")
-    if exact and family:
+    if exact and family and (exact["factory"] != "3" or family["factory"] != "3"):
         return fail("공장 규칙 충돌")
     rule = exact or family
+    # The owner explicitly groups all 41-series Tibialis tendons, regardless of anterior/posterior.
+    tibialis = icube.startswith("41") and (has_tibialis(row["name"]) or (rule and has_tibialis(rule.get("product", ""))))
+    if tibialis:
+        rule = {"factory": "3", "product": "TIBIALIS"}
     exception = refs.get("exceptions", {}).get(row["erp"] + "|" + row["lot"])
     if exception:
         expiry = iso_date(exception["expiry"])
@@ -241,6 +280,8 @@ def summarize(rows):
     counts = Counter()
     quantities = {}
     for row in rows:
+        if not is_finished_product(row):
+            continue
         qty = number(row["quantity"])
         if qty == 0:
             continue

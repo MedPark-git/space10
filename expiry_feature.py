@@ -11,7 +11,7 @@ from flask import Blueprint, Response, abort, flash, redirect, render_template, 
 from flask_login import current_user, login_required
 from sqlalchemy import select, text
 
-from expiry_engine import FORMATS, InputError, calculate, index_mts, iso_date, number, parse_paste, summarize
+from expiry_engine import FORMATS, InputError, calculate, index_mts, iso_date, number, parse_paste, stock_scope, summarize
 
 
 def make_models(db):
@@ -75,8 +75,10 @@ def register_expiry(app, db, audit, roles):
             abort(400)
         thresholds = tuple(refs.get("settings", {}).get("alerts", {}).get("days", [90, 180, 365]))
         indexed = index_mts(refs)
-        rows = [calculate(e["data"], indexed, as_of, thresholds) for e in snapshot.payload] if snapshot else []
+        products, scope = stock_scope(snapshot.payload if snapshot else [])
+        rows = [calculate(e["data"], indexed, as_of, thresholds) for e in products]
         summary = summarize(rows)
+        summary["scope"] = scope
         warehouses = sorted({r["warehouse"] for r in rows})
         statuses = sorted({r["status"] for r in rows})
         q = request.args.get("q", "").strip().casefold()
@@ -140,14 +142,15 @@ def register_expiry(app, db, audit, roles):
         if pending.created_by != current_user.id:
             abort(403)
         refs = references()
-        changes = [{"key": e["key"], "before": refs.get(pending.kind, {}).get(e["key"]), "after": e["data"]} for e in pending.payload]
+        entries, scope = stock_scope(pending.payload) if pending.kind == "stock" else (pending.payload, {})
+        changes = [{"key": e["key"], "before": refs.get(pending.kind, {}).get(e["key"]), "after": e["data"]} for e in entries]
         indexed = index_mts(refs)
-        examples = [calculate(e["data"], indexed, pending.as_of) for e in pending.payload] if pending.kind == "stock" else []
+        examples = [calculate(e["data"], indexed, pending.as_of) for e in entries] if pending.kind == "stock" else []
         page = max(1, request.args.get('page', 1, type=int))
         pages = max(1, (len(changes)+99)//100)
         page = min(page, pages)
         return render_template("expiry_preview.html", pending=pending, title=FORMATS[pending.kind][0], changes=changes[(page-1)*100:page*100], page=page, pages=pages,
-                               total=len(changes), summary=summarize(examples), examples=examples[:30],
+                               total=len(changes), summary=summarize(examples), scope=scope, examples=examples[:30],
                                quantity=str(sum((number(e["data"]["quantity"]) for e in pending.payload), number(0))) if pending.kind == "stock" else None)
 
     @bp.post("/commit/<import_id>")
@@ -165,6 +168,9 @@ def register_expiry(app, db, audit, roles):
         if pending.base_revision != revision(references()):
             flash("미리보기 이후 기준정보가 변경되었습니다. 자료를 다시 붙여넣어 확인해 주세요.", "error")
             return redirect(url_for("expiry.import_data", kind=pending.kind))
+        if pending.kind == "stock" and any("account" not in e["data"] for e in pending.payload):
+            flash("계정구분이 없는 이전 미리보기입니다. 계정구분 열을 포함해 재고를 다시 붙여넣어 주세요.", "error")
+            return redirect(url_for("expiry.import_data", kind="stock"))
         now = datetime.now(timezone.utc)
         if pending.kind != "stock":
             existing = {r.key: r for r in db.session.scalars(select(Reference).where(Reference.kind == pending.kind))}
@@ -227,7 +233,7 @@ def register_expiry(app, db, audit, roles):
     def export():
         _, _, _, _, _, _, rows = current_view()
         columns = [("warehouse", "창고"), ("location", "장소"), ("erp", "아마란스 품번"), ("icube", "ICUBE 품번"),
-                   ("name", "품명"), ("spec", "규격"), ("lot", "LOT"), ("unit", "단위"), ("quantity", "기말재고"),
+                   ("name", "품명"), ("spec", "규격"), ("account", "계정구분"), ("lot", "LOT"), ("unit", "단위"), ("quantity", "기말재고"),
                    ("factory", "공장"), ("expiry", "사용기한"), ("remaining", "잔여일"), ("status", "상태"), ("error", "확인사항"), ("source", "계산근거")]
         stream = io.StringIO()
         writer = csv.writer(stream)

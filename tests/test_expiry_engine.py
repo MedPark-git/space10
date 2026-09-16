@@ -1,11 +1,11 @@
 from datetime import date
 import pytest
 
-from expiry_engine import InputError, calculate, parse_paste, summarize
+from expiry_engine import InputError, calculate, parse_paste, summarize, stock_scope, product_matches
 
 
 def stock(erp="0001", lot="XB240229C1001", name="BONE XB"):
-    return dict(erp=erp, lot=lot, name=name, warehouse="완제품", location="보관실", unit="EA", quantity="2")
+    return dict(erp=erp, lot=lot, name=name, account="제품", warehouse="완제품", location="보관실", unit="EA", quantity="2")
 
 
 def base_refs():
@@ -40,7 +40,7 @@ def test_mts_cannot_override_factory_12():
     assert calculate(stock(),refs,date(2026,9,15))["expiry"]=="2027-02-27"
 
 
-def test_same_lot_cp_hd_are_separate_and_suffix_ignored_for_factory_3():
+def test_factory_3_explicit_common_rules_preserve_cp_hd_separation():
     refs={"mapping":{"CP":{"icube":"40CP025-01"},"HD":{"icube":"40HD025-CE"}},
           "rules":{"40CP|*":{"factory":"3","product":"CP","days":1825},"40HD|*":{"factory":"3","product":"HD","days":730}},
           "mts":{"CP|240039SA":{"expiry":"2029-05-21"},"HD|240039SA":{"expiry":"2026-05-21"}}}
@@ -77,13 +77,13 @@ def test_excel_rules_import_accepts_leading_zero_suffix_and_duplicates():
 
 
 def test_stock_zero_decimal_and_total_preserved():
-    source="No\t창고\t장소\t품번\t품명\tLOT No.\t기말재고\t재고단위\n1\t완제품\tA\t0001\t샘플\tXB240229C1\t1,200.25\tEA\n2\t완제품\tA\t0002\t샘플2\t\t\tEA\n\t합계\t\t\t\t\t1,200.25\t"
+    source="No\t창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\t재고단위\n1\t완제품\tA\t0001\t샘플\t제품\tXB240229C1\t1,200.25\tEA\n2\t완제품\tA\t0002\t샘플2\t제품\t\t\tEA\n\t합계\t\t\t\t\t\t1,200.25\t"
     entries,notes=parse_paste("stock",source)
     assert len(entries)==2 and entries[0]["data"]["erp"]=="0001"
     assert entries[1]["data"]["quantity"]=="0"
     assert notes["기말재고 합계 일치"]==1
     with pytest.raises(InputError,match="합계가 일치하지"):
-        parse_paste("stock",source.replace("합계\t\t\t\t\t1,200.25","합계\t\t\t\t\t1,200.26"))
+        parse_paste("stock",source.replace("합계\t\t\t\t\t\t1,200.25","합계\t\t\t\t\t\t1,200.26"))
 
 
 def test_unit_totals_not_combined():
@@ -115,4 +115,74 @@ def test_mts_product_phrase_matching_preserves_group_and_detects_conflicts():
 @pytest.mark.parametrize("qty",["NaN","Infinity","-Infinity","1000000000000","0.0000001"])
 def test_invalid_quantities_rejected(qty):
     with pytest.raises(InputError):
-        parse_paste("stock",f"창고\t장소\t품번\t품명\tLOT No.\t기말재고\nA\tB\t0001\tName\tLOT\t{qty}")
+        parse_paste("stock",f"창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\nA\tB\t0001\tName\t제품\tLOT\t{qty}")
+
+
+def test_only_finished_products_in_same_warehouse_are_counted_and_raw_total_still_checked():
+    source = ('창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\t재고단위\n'
+              '부적합창고\tA\t0001\t제품명\t제품\tXB240229C1\t2.25\tEA\n'
+              '부적합창고\tA\t0002\t반제품명\t반제품\tBAD\t7.5\tEA\n'
+              '부적합창고\tA\t0003\t미분류\t\t\t1\tEA\n'
+              '합계\t\t\t\t\t\t10.75\t')
+    entries, notes = parse_paste('stock', source)
+    products, scope = stock_scope(entries)
+    assert len(entries) == 3 and len(products) == 1
+    assert scope == {'원본 행':3, '집계 대상 제품':1, '제품 외 제외':1, '계정구분 미확인 제외':1}
+    assert notes['기말재고 합계 일치'] == 1
+    rows = [calculate(e['data'], base_refs(), date(2026,9,16)) for e in entries]
+    assert rows[1]['expiry'] is None and rows[1]['status'] == '집계 제외'
+    assert sum(summarize(rows)['counts'].values()) == 1
+    assert list(summarize(rows)['quantities'].values()) == ['2.25']
+    with pytest.raises(InputError, match='합계가 일치하지'):
+        parse_paste('stock', source.replace('10.75', '2.25'))
+
+
+def test_account_header_is_required_and_missing_legacy_account_is_not_assumed_product():
+    with pytest.raises(InputError, match='계정구분'):
+        parse_paste('stock', '창고\t장소\t품번\t품명\tLOT No.\t기말재고\nA\tB\t1\t품명\tLOT\t1')
+    row = stock(); row.pop('account')
+    assert calculate(row, base_refs(), date(2026,9,16))['status'] == '집계 제외'
+
+
+@pytest.mark.parametrize('prefix', ['39FD', '42AP', '48AP'])
+def test_factory_3_suffix_rules_are_preserved_and_override_common_rules(prefix):
+    entries, _ = parse_paste('rules', f'공장\t앞자리 KEY\t끝자리 KEY\t유효일수\tMTS 제품구분\n3\t{prefix}\t01\t1095\tS GEN\n3\t{prefix}\t12\t1095\tHAHA GEN INJECT\n3\t{prefix}\t*\t1095\tOTHER')
+    refs = {'mapping':{'0001':{'icube':prefix+'100-12'}}, 'rules':{e['key']:e['data'] for e in entries},
+            'mts':{'A':{'product':'S GEN','lot':'240039SA','expiry':'2027-01-01'},
+                   'B':{'product':'S GEN INJECT','lot':'240039SA','expiry':'2029-01-01'},
+                   'C':{'product':'OTHER','lot':'240039SA','expiry':'2030-01-01'}}}
+    assert set(refs['rules']) == {prefix+'|01', prefix+'|12', prefix+'|*'}
+    row = stock(lot='240039SA', name='Original ODM name')
+    result = calculate(row, refs, date(2026,9,16))
+    assert result['expiry'] == '2029-01-01' and result['name'] == row['name']
+    assert result['icube'] == prefix+'100-12'
+    refs['mapping']['0001']['icube'] = prefix+'100-01'
+    assert calculate(row, refs, date(2026,9,16))['expiry'] == '2027-01-01'
+    refs['mapping']['0001']['icube'] = prefix+'100-99'
+    assert calculate(row, refs, date(2026,9,16))['expiry'] == '2030-01-01'
+
+
+@pytest.mark.parametrize('left,right', [('HAHA GEN','S GEN'), ('s-gen inject','haha gen inject'), ('하하겐','SGEN')])
+def test_confirmed_brand_aliases_match_in_both_directions(left, right):
+    assert product_matches(left, right) and product_matches(right, left)
+
+
+def test_inject_plain_and_unrelated_products_are_not_mixed():
+    assert not product_matches('HAHA GEN INJECT', 'S GEN')
+    assert not product_matches('S GEN', 'HAHA GEN INJECT')
+    assert not product_matches('SHD', 'HD')
+    assert product_matches('ODM BRAND B', 'BRAND A | BRAND B')
+
+
+@pytest.mark.parametrize('name', ['Tibialis Anterior tendon', 'TIBIALIS POSTERIOR TENDON'])
+def test_41_tibialis_uses_common_mts_without_direction_and_conflicts_are_flagged(name):
+    refs = {'mapping':{'0001':{'icube':'41TB100-12'}},
+            'mts':{'A':{'product':'Tibialis Anterior tendon','lot':'240039SA','expiry':'2029-01-01'},
+                   'B':{'product':'TIBIALIS POSTERIOR tendon','lot':'240039SA','expiry':'2029-01-01'}}}
+    row = stock(lot='240039SA', name=name)
+    assert calculate(row, refs, date(2026,9,16))['expiry'] == '2029-01-01'
+    refs['mts']['B']['expiry'] = '2028-01-01'
+    result = calculate(row, refs, date(2026,9,16))
+    assert result['expiry'] is None and '충돌' in result['error']
+    refs['mapping']['0001']['icube'] = '42TB100-12'
+    assert '규칙 미등록' in calculate(row, refs, date(2026,9,16))['error']
