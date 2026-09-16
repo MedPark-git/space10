@@ -3,6 +3,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -190,7 +191,7 @@ def register_expiry(app, db, audit, roles):
                     and (not request.args.get("warehouse") or r["warehouse"] == request.args["warehouse"])
                     and (not request.args.get("factory") or r["factory"] == request.args["factory"])
                     and (not request.args.get("status") or r["status"] == request.args["status"])
-                    and (not q or any(q in str(r.get(k, "")).casefold() for k in ("erp", "icube", "name", "lot", "location")))]
+                    and (not q or any(q in str(r.get(k, "")).casefold() for k in ("erp", "icube", "name", "spec", "lot", "warehouse", "location")))]
         filtered.sort(key=lambda r: (0 if r["error"] else 1, r["expiry"] or "", r["name"], r["lot"]))
         return refs, snapshot, as_of, summary, warehouses, statuses, filtered
 
@@ -257,6 +258,86 @@ def register_expiry(app, db, audit, roles):
                               "lots": distinct_lots(negative)},
                 "non_ea": by_unit, "non_ea_lots": distinct_lots(non_ea)}
 
+    default_available_warehouse_keys = {"완제품창고", "3공장완제품창고"}
+
+    def warehouse_key(name):
+        return re.sub(r"\s+", "", str(name or "")).casefold()
+
+    def warehouse_classification(name, refs):
+        key = warehouse_key(name)
+        custom = refs.get("warehouse_classes", {}).get(key)
+        if custom and custom.get("classification") in {"available", "unavailable"}:
+            return custom["classification"], "관리자 설정"
+        if key in default_available_warehouse_keys:
+            return "available", "기본 가용창고"
+        return "unclassified", "분류 필요"
+
+    def availability_stats(rows, refs):
+        result = {}
+        for classification in ("available", "unavailable", "unclassified"):
+            group = [row for row in rows if warehouse_classification(row.get("warehouse"), refs)[0] == classification]
+            result[classification] = inventory_stat(group)
+        return result
+
+    def product_risk_groups(rows, refs, limit=12):
+        groups = {}
+        for row in rows:
+            if not is_positive_ea(row):
+                continue
+            key = (row["erp"], row["name"], row.get("spec") or "규격 미등록")
+            group = groups.setdefault(key, {"erp": row["erp"], "icube": row.get("icube"), "name": row["name"],
+                                             "spec": row.get("spec") or "규격 미등록", "total": number(0),
+                                             "expired": number(0), "due90": number(0), "issues": number(0),
+                                             "lot_keys": set(), "warehouses": set(), "locations": set(), "nearest": None})
+            quantity = number(row["quantity"])
+            group["total"] += quantity
+            bucket = action_bucket(row)
+            if bucket == "만료":
+                group["expired"] += quantity
+            elif bucket == "1~90일":
+                group["due90"] += quantity
+            elif bucket == "확인 필요":
+                group["issues"] += quantity
+            group["lot_keys"].add((row["erp"], row["lot"] or (row["warehouse"], row["location"])))
+            group["warehouses"].add(row["warehouse"] or "미지정")
+            group["locations"].add((row["warehouse"] or "미지정", row["location"] or "장소 미지정"))
+            if row["remaining"] is not None:
+                group["nearest"] = row["remaining"] if group["nearest"] is None else min(group["nearest"], row["remaining"])
+        results = []
+        for group in groups.values():
+            if not (group["expired"] or group["due90"] or group["issues"]):
+                continue
+            group["lots"] = len(group.pop("lot_keys"))
+            group["warehouses"] = sorted(group["warehouses"])
+            group["locations"] = sorted(group["locations"])
+            results.append(group)
+        results.sort(key=lambda group: (group["expired"], group["due90"], group["issues"], group["total"]), reverse=True)
+        return results[:limit]
+
+    def inventory_product_groups(rows, refs):
+        groups = {}
+        for row in rows:
+            if number(row["quantity"]) <= 0:
+                continue
+            unit = (row.get("unit") or "단위 미확인").strip() or "단위 미확인"
+            key = (row["erp"], row["name"], row.get("spec") or "규격 미등록", unit)
+            group = groups.setdefault(key, {"erp": row["erp"], "icube": row.get("icube"), "name": row["name"],
+                                             "spec": row.get("spec") or "규격 미등록", "unit": unit,
+                                             "total": number(0), "available": number(0), "unavailable": number(0),
+                                             "unclassified": number(0), "lot_keys": set(), "places": set()})
+            quantity = number(row["quantity"])
+            classification, _ = warehouse_classification(row.get("warehouse"), refs)
+            group["total"] += quantity
+            group[classification] += quantity
+            group["lot_keys"].add((row["erp"], row["lot"] or (row["warehouse"], row["location"])))
+            group["places"].add((row["warehouse"] or "미지정", row["location"] or "장소 미지정"))
+        results = []
+        for group in groups.values():
+            group["lots"] = len(group.pop("lot_keys"))
+            group["places"] = sorted(group["places"])
+            results.append(group)
+        return sorted(results, key=lambda group: (group["available"], group["total"], group["name"]), reverse=True)
+
     @bp.get("/dashboard")
     @login_required
     def dashboard():
@@ -266,6 +347,13 @@ def register_expiry(app, db, audit, roles):
         bucket_map = {entry["key"]: entry for entry in buckets}
         total_stats = inventory_stat(active)
         quality = data_quality_stats(active)
+        availability = availability_stats(active, refs)
+        product_risks = product_risk_groups(active, refs)
+        inventory_preview = inventory_product_groups(active, refs)[:10]
+        availability_labels = {"available": "가용재고", "unavailable": "비가용재고", "unclassified": "분류 필요"}
+        for row in active:
+            row["availability"], row["availability_source"] = warehouse_classification(row.get("warehouse"), refs)
+            row["availability_label"] = availability_labels[row["availability"]]
         priority = sorted((row for row in active if is_positive_ea(row) and (row["error"] or (row["remaining"] is not None and row["remaining"] <= 90))),
                           key=lambda row: (0 if row["remaining"] is not None and row["remaining"] <= 0 else
                                            1 if row["remaining"] is not None and row["remaining"] <= 90 else 2,
@@ -285,7 +373,72 @@ def register_expiry(app, db, audit, roles):
                                metrics={"expired": bucket_map["expired"], "due90": bucket_map["due90"],
                                         "unresolved": bucket_map["issue"], "total": total_stats},
                                buckets=buckets, priority=priority, quality=quality, warehouse_risk=warehouse_risk[:8],
+                               availability=availability, product_risks=product_risks, inventory_preview=inventory_preview,
                                ref_counts={kind: len(refs.get(kind, {})) for kind in FORMATS if kind != "stock"})
+
+    @bp.get("/inventory-location")
+    @login_required
+    def inventory_location():
+        refs, snapshot, as_of, _, warehouses, _, rows = current_view()
+        labels = {"available": "가용재고", "unavailable": "비가용재고", "unclassified": "분류 필요"}
+        positive = [row for row in rows if number(row["quantity"]) > 0]
+        summary = availability_stats(positive, refs)
+        for row in positive:
+            row["availability"], row["availability_source"] = warehouse_classification(row.get("warehouse"), refs)
+            row["availability_label"] = labels[row["availability"]]
+        selected = request.args.get("availability", "")
+        if selected and selected not in labels:
+            abort(400)
+        filtered = [row for row in positive if not selected or row["availability"] == selected]
+        groups = inventory_product_groups(filtered, refs)
+        page = max(1, request.args.get("page", 1, type=int))
+        pages = max(1, (len(filtered) + 99) // 100)
+        page = min(page, pages)
+        args = request.args.to_dict(); args.pop("page", None)
+        return render_template("inventory_location.html", snapshot=snapshot, as_of=as_of, rows=filtered[(page-1)*100:page*100],
+                               total=len(filtered), page=page, pages=pages, groups=groups[:100], summary=summary,
+                               warehouses=warehouses, selected=selected, labels=labels,
+                               previous_url=url_for("expiry.inventory_location", **args, page=page-1),
+                               next_url=url_for("expiry.inventory_location", **args, page=page+1))
+
+    @bp.route("/warehouse-classes", methods=["GET", "POST"])
+    @roles("admin", "editor")
+    def warehouse_classes():
+        if request.method == "POST":
+            names = request.form.getlist("warehouse_name")
+            classifications = request.form.getlist("classification")
+            if len(names) != len(classifications):
+                abort(400)
+            lock_writes()
+            for name, classification in zip(names, classifications):
+                name = str(name or "").strip()
+                if not name or classification not in {"available", "unavailable", "unclassified"}:
+                    abort(400)
+                key = warehouse_key(name)
+                row = db.session.scalar(select(Reference).where(Reference.kind == "warehouse_classes", Reference.key == key))
+                if classification == "unclassified":
+                    if row:
+                        db.session.delete(row)
+                    continue
+                if not row:
+                    row = Reference(kind="warehouse_classes", key=key)
+                    db.session.add(row)
+                row.payload = {"name": name, "classification": classification}
+                row.updated_by = current_user.id
+                row.updated_at = datetime.now(timezone.utc)
+            audit("warehouse_classes_updated", detail=f"{len(names)} warehouses", commit=False)
+            db.session.commit()
+            flash("창고별 가용재고 분류를 저장했습니다.", "success")
+            return redirect(url_for("expiry.warehouse_classes"))
+        refs = references()
+        snapshot = latest_snapshot()
+        products, _ = stock_scope(snapshot.payload if snapshot else [])
+        names = sorted({entry["data"].get("warehouse") or "미지정" for entry in products})
+        rows = []
+        for name in names:
+            classification, source = warehouse_classification(name, refs)
+            rows.append({"name": name, "classification": classification, "source": source})
+        return render_template("warehouse_classes.html", rows=rows, snapshot=snapshot)
 
     @bp.get("/master-data")
     @login_required
@@ -324,8 +477,9 @@ def register_expiry(app, db, audit, roles):
         for row in active:
             if not row["error"] and (row["remaining"] is None or row["remaining"] > 365):
                 continue
-            key = (row["erp"], row["name"], row["unit"])
-            group = product_groups.setdefault(key, {"erp": row["erp"], "name": row["name"], "unit": row["unit"],
+            key = (row["erp"], row["name"], row.get("spec") or "규격 미등록", row["unit"])
+            group = product_groups.setdefault(key, {"erp": row["erp"], "name": row["name"],
+                                                     "spec": row.get("spec") or "규격 미등록", "unit": row["unit"],
                                                      "lot_keys": set(), "quantity": number(0), "expired": 0,
                                                      "due90": 0, "issues": 0, "nearest": None})
             group["lot_keys"].add((row["erp"], row["lot"] or (row["warehouse"], row["location"])))
