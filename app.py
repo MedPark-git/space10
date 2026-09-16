@@ -303,28 +303,18 @@ def register_routes(app):
                 audit("password_changed", target_type="user", target_id=current_user.id, commit=False); db.session.commit()
                 from runtime_security import remove_bootstrap_credentials
                 remove_bootstrap_credentials(current_user.login_id)
-                flash("비밀번호가 변경되었습니다.", "success"); return redirect(url_for("dashboard"))
+                flash("비밀번호가 변경되었습니다.", "success"); return redirect(url_for("expiry.dashboard"))
         return render_template("password.html", first=current_user.must_change_password)
 
     @app.get("/")
     @login_required
     def dashboard():
-        total_items = db.session.scalar(select(func.count(Item.id)).where(Item.is_active.is_(True))) or 0
-        inventory_value = db.session.scalar(select(func.coalesce(func.sum(Item.quantity * Item.unit_cost), 0)).where(Item.is_active.is_(True))) or 0
-        low_stock = db.session.scalar(select(func.count(Item.id)).where(Item.is_active.is_(True), Item.quantity <= Item.safety_stock)) or 0
-        recent = db.session.scalars(select(StockMovement).options(joinedload(StockMovement.item), joinedload(StockMovement.creator)).order_by(StockMovement.occurred_at.desc()).limit(8)).all()
-        return render_template("dashboard.html", total_items=total_items, inventory_value=inventory_value, low_stock=low_stock, recent=recent)
+        return redirect(url_for("expiry.dashboard"))
 
     @app.get("/items")
     @login_required
     def items():
-        q = request.args.get("q", "").strip(); category = request.args.get("category", "").strip()
-        stmt = select(Item).where(Item.is_active.is_(True)).order_by(Item.name)
-        if q: stmt = stmt.where((Item.code.ilike(f"%{q}%")) | (Item.name.ilike(f"%{q}%")))
-        if category: stmt = stmt.where(Item.category == category)
-        rows = db.session.scalars(stmt).all()
-        categories = db.session.scalars(select(Item.category).where(Item.category.is_not(None)).distinct().order_by(Item.category)).all()
-        return render_template("items.html", items=rows, categories=categories, q=q, selected_category=category)
+        return redirect(url_for("expiry.master_data"))
 
     @app.get("/api/items")
     @login_required
@@ -375,31 +365,13 @@ def register_routes(app):
     @login_required
     def movements():
         if request.method == "POST":
-            if current_user.role not in {"admin", "editor"}: abort(403)
-            item = db.session.execute(select(Item).where(Item.id == request.form.get("item_id")).with_for_update()).scalar_one_or_none()
-            kind = request.form.get("movement_type"); qty = float(request.form.get("quantity", 0))
-            if not item or kind not in {"IN", "OUT"} or qty <= 0:
-                flash("품목, 구분, 수량을 확인해 주세요.", "error")
-            elif kind == "OUT" and float(item.quantity) < qty:
-                flash("현재고보다 많은 수량은 출고할 수 없습니다.", "error")
-            else:
-                item.quantity = float(item.quantity) + (qty if kind == "IN" else -qty); item.last_movement_at=utcnow(); item.updated_by=current_user.id
-                row=StockMovement(item_id=item.id, movement_type=kind, quantity=qty, reference=form_value("reference") or None,
-                                  note=form_value("note") or None, created_by=current_user.id, updated_by=current_user.id)
-                db.session.add(row); db.session.flush(); audit("movement_created", target_type="movement", target_id=row.id, detail=f"{item.code}:{kind}:{qty}", commit=False); db.session.commit()
-                flash("입출고가 반영되었습니다.", "success"); return redirect(url_for("movements"))
-        rows=db.session.scalars(select(StockMovement).options(joinedload(StockMovement.item), joinedload(StockMovement.creator)).order_by(StockMovement.occurred_at.desc()).limit(200)).all()
-        item_rows=db.session.scalars(select(Item).where(Item.is_active.is_(True)).order_by(Item.name)).all()
-        return render_template("movements.html", movements=rows, items=item_rows)
+            abort(404)
+        return redirect(url_for("expiry.stock_history"))
 
     @app.get("/analysis")
     @login_required
     def analysis():
-        low=db.session.scalars(select(Item).where(Item.is_active.is_(True), Item.quantity <= Item.safety_stock).order_by((Item.safety_stock-Item.quantity).desc())).all()
-        top=db.session.scalars(select(Item).where(Item.is_active.is_(True)).order_by((Item.quantity*Item.unit_cost).desc()).limit(10)).all()
-        cutoff=utcnow()-timedelta(days=90)
-        dormant=db.session.scalars(select(Item).where(Item.is_active.is_(True), (Item.last_movement_at.is_(None)) | (Item.last_movement_at < cutoff)).order_by(Item.last_movement_at.asc())).all()
-        return render_template("analysis.html", low=low, top=top, dormant=dormant)
+        return redirect(url_for("expiry.analysis"))
 
     @app.get("/profile")
     @login_required

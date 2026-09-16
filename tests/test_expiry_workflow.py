@@ -81,6 +81,41 @@ def test_snapshot_preview_commit_idempotency_and_routes(web):
     assert db.session.scalar(select(db.func.count()).select_from(__import__('app').Item))==0
 
 
+def test_operational_pages_use_expiry_snapshot_and_never_show_nonproducts(web):
+    _, client = web; login(client)
+    for url, message in [('/expiry/dashboard', '아직 등록된 ERP 재고가 없습니다'),
+                         ('/expiry/analysis', '분석할 ERP 재고가 없습니다'),
+                         ('/expiry/stock-history', '등록된 재고 자료가 없습니다'),
+                         ('/expiry/master-data', '권장 등록 순서')]:
+        response = client.get(url)
+        assert response.status_code == 200, url
+        assert message in response.get_data(as_text=True)
+
+    commit(client, preview(client, 'mapping', '아마란스 품번\tICUBE 품번\n0001\t11BC025-01'))
+    commit(client, preview(client, 'rules', 'KEY값\tKEY값2\t유효기간\n11BC\t01\t3'))
+    stock = ('창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\t재고단위\n'
+             '부적합창고\tA\t0001\tPRODUCT_ACTION\t제품\tXB240229C1001\t2\tEA\n'
+             '부적합창고\tB\t0002\tSEMI_HIDDEN\t반제품\tBAD\t99\tEA')
+    commit(client, preview(client, 'stock', stock, '2026-09-16'))
+
+    for url in ['/expiry/dashboard?as_of=2027-03-01', '/expiry/analysis?as_of=2027-03-01',
+                '/expiry/stock-history']:
+        body = client.get(url).get_data(as_text=True)
+        assert 'PRODUCT_ACTION' in body or url == '/expiry/stock-history'
+        assert 'SEMI_HIDDEN' not in body
+    dashboard = client.get('/expiry/dashboard?as_of=2027-03-01').get_data(as_text=True)
+    assert '조치 우선 재고' in dashboard and '창고별 위험' in dashboard and '부적합창고' in dashboard
+    analysis = client.get('/expiry/analysis?as_of=2027-03-01').get_data(as_text=True)
+    assert '품목별 우선 검토' in analysis and '2 EA' in analysis
+    history = client.get('/expiry/stock-history').get_data(as_text=True)
+    assert '2026-09-16' in history and '제품 외 1' in history
+    assert client.get('/').location.endswith('/expiry/dashboard')
+    assert client.get('/items').location.endswith('/expiry/master-data')
+    assert client.get('/movements').location.endswith('/expiry/stock-history')
+    assert client.get('/analysis').location.endswith('/expiry/analysis')
+    assert client.post('/movements', data={}).status_code == 404
+
+
 def test_reference_change_invalidates_pending_preview(web):
     app,client=web;login(client)
     a=preview(client,'mapping','아마란스 품번\tICUBE 품번\n0001\t11BC025-01')

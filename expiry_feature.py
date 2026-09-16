@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -161,14 +162,128 @@ def register_expiry(app, db, audit, roles):
         warehouses = sorted({r["warehouse"] for r in rows})
         statuses = sorted({r["status"] for r in rows})
         q = request.args.get("q", "").strip().casefold()
+        bucket = request.args.get("bucket", "")
+        def in_bucket(row):
+            if bucket == "expired":
+                return not row["error"] and row["remaining"] is not None and row["remaining"] <= 0
+            if bucket == "due90":
+                return not row["error"] and row["remaining"] is not None and 0 < row["remaining"] <= 90
+            if bucket == "issue":
+                return bool(row["error"])
+            return True
         filtered = [r for r in rows if
                     (request.args.get("zero") == "1" or number(r["quantity"]) != 0)
+                    and in_bucket(r)
                     and (not request.args.get("warehouse") or r["warehouse"] == request.args["warehouse"])
                     and (not request.args.get("factory") or r["factory"] == request.args["factory"])
                     and (not request.args.get("status") or r["status"] == request.args["status"])
                     and (not q or any(q in str(r.get(k, "")).casefold() for k in ("erp", "icube", "name", "lot", "location")))]
         filtered.sort(key=lambda r: (0 if r["error"] else 1, r["expiry"] or "", r["name"], r["lot"]))
         return refs, snapshot, as_of, summary, warehouses, statuses, filtered
+
+    def action_bucket(row):
+        if row["error"]:
+            return "확인 필요"
+        remaining = row["remaining"]
+        if remaining is None:
+            return "확인 필요"
+        if remaining <= 0:
+            return "만료"
+        if remaining <= 90:
+            return "1~90일"
+        if remaining <= 180:
+            return "91~180일"
+        if remaining <= 365:
+            return "181~365일"
+        return "365일 초과"
+
+    def active_rows(rows):
+        return [row for row in rows if number(row["quantity"]) != 0]
+
+    @bp.get("/dashboard")
+    @login_required
+    def dashboard():
+        refs, snapshot, as_of, summary, _, _, rows = current_view()
+        active = active_rows(rows)
+        buckets = Counter(action_bucket(row) for row in active)
+        priority = sorted((row for row in active if row["error"] or (row["remaining"] is not None and row["remaining"] <= 90)),
+                          key=lambda row: (0 if row["remaining"] is not None and row["remaining"] <= 0 else
+                                           1 if row["remaining"] is not None and row["remaining"] <= 90 else 2,
+                                           row["remaining"] if row["remaining"] is not None else 999999,
+                                           row["name"], row["lot"]))[:15]
+        warehouse_risk = []
+        for warehouse in sorted({row["warehouse"] or "미지정" for row in active}):
+            group = [row for row in active if (row["warehouse"] or "미지정") == warehouse]
+            warehouse_risk.append({"name": warehouse, "total": len(group),
+                                   "expired": sum(action_bucket(row) == "만료" for row in group),
+                                   "due90": sum(action_bucket(row) == "1~90일" for row in group),
+                                   "issues": sum(action_bucket(row) == "확인 필요" for row in group)})
+        warehouse_risk.sort(key=lambda row: (row["expired"] + row["due90"] + row["issues"], row["total"]), reverse=True)
+        metrics = {"rows": len(active), "products": len({row["erp"] for row in active}),
+                   "expired": buckets["만료"], "due90": buckets["1~90일"],
+                   "unresolved": buckets["확인 필요"]}
+        return render_template("expiry_dashboard.html", snapshot=snapshot, as_of=as_of, summary=summary,
+                               metrics=metrics, buckets=buckets, max_bucket=max([*buckets.values(), 1]), priority=priority,
+                               warehouse_risk=warehouse_risk[:8],
+                               ref_counts={kind: len(refs.get(kind, {})) for kind in FORMATS if kind != "stock"})
+
+    @bp.get("/master-data")
+    @login_required
+    def master_data():
+        refs = references()
+        kinds = [(kind, FORMATS[kind][0], len(refs.get(kind, {}))) for kind in FORMATS if kind != "stock"]
+        return render_template("expiry_master_data.html", kinds=kinds,
+                               family_rule_count=len(refs.get("family_rules", {})))
+
+    @bp.get("/stock-history")
+    @login_required
+    def stock_history():
+        imports = db.session.scalars(select(Import).where(Import.kind == "stock", Import.committed_at.is_not(None))
+                                     .order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(100)).all()
+        return render_template("expiry_stock_history.html", imports=imports, latest=latest_snapshot())
+
+    @bp.get("/analysis")
+    @login_required
+    def analysis():
+        _, snapshot, as_of, summary, _, _, rows = current_view()
+        active = active_rows(rows)
+        bucket_order = ["만료", "1~90일", "91~180일", "181~365일", "365일 초과", "확인 필요"]
+        bucket_counts = Counter(action_bucket(row) for row in active)
+        buckets = [(label, bucket_counts[label]) for label in bucket_order]
+        warehouses = []
+        for warehouse in sorted({row["warehouse"] or "미지정" for row in active}):
+            group = [row for row in active if (row["warehouse"] or "미지정") == warehouse]
+            warehouses.append({"name": warehouse, "total": len(group),
+                               "expired": sum(action_bucket(row) == "만료" for row in group),
+                               "due90": sum(action_bucket(row) == "1~90일" for row in group),
+                               "due180": sum(action_bucket(row) == "91~180일" for row in group),
+                               "issues": sum(action_bucket(row) == "확인 필요" for row in group)})
+        warehouses.sort(key=lambda row: (row["expired"], row["due90"], row["issues"], row["total"]), reverse=True)
+        product_groups = {}
+        for row in active:
+            if not row["error"] and (row["remaining"] is None or row["remaining"] > 365):
+                continue
+            key = (row["erp"], row["name"], row["unit"])
+            group = product_groups.setdefault(key, {"erp": row["erp"], "name": row["name"], "unit": row["unit"],
+                                                     "lots": 0, "quantity": number(0), "expired": 0,
+                                                     "due90": 0, "issues": 0, "nearest": None})
+            group["lots"] += 1
+            group["quantity"] += number(row["quantity"])
+            bucket = action_bucket(row)
+            group["expired"] += bucket == "만료"
+            group["due90"] += bucket == "1~90일"
+            group["issues"] += bucket == "확인 필요"
+            if row["remaining"] is not None:
+                group["nearest"] = row["remaining"] if group["nearest"] is None else min(group["nearest"], row["remaining"])
+        products = sorted(product_groups.values(), key=lambda group: (0 if group["expired"] else 1,
+                           0 if group["due90"] else 1, 0 if group["issues"] else 1,
+                           group["nearest"] if group["nearest"] is not None else 999999,
+                           group["name"]))[:30]
+        factories = Counter((row["factory"] + "공장") if row["factory"] else "미확인" for row in active)
+        issues = Counter(row["error"] for row in active if row["error"])
+        return render_template("expiry_analysis_data.html", snapshot=snapshot, as_of=as_of, summary=summary,
+                               total=len(active), buckets=buckets, warehouses=warehouses, products=products,
+                               factories=factories.most_common(), issues=issues.most_common())
 
     @bp.get("/")
     @login_required
