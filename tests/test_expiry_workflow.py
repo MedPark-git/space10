@@ -104,9 +104,9 @@ def test_operational_pages_use_expiry_snapshot_and_never_show_nonproducts(web):
         assert 'PRODUCT_ACTION' in body or url == '/expiry/stock-history'
         assert 'SEMI_HIDDEN' not in body
     dashboard = client.get('/expiry/dashboard?as_of=2027-03-01').get_data(as_text=True)
-    assert '조치 우선 재고' in dashboard and '창고별 위험' in dashboard and '부적합창고' in dashboard
+    assert '조치 우선 LOT 상세' in dashboard and '품목·규격별 유효기간 위험' in dashboard and '부적합창고' in dashboard
     analysis = client.get('/expiry/analysis?as_of=2027-03-01').get_data(as_text=True)
-    assert '품목별 우선 검토' in analysis and '2 EA' in analysis
+    assert '품목·규격별 우선 검토' in analysis and '2 EA' in analysis
     history = client.get('/expiry/stock-history').get_data(as_text=True)
     assert '2026-09-16' in history and '제품 외 1' in history
     assert client.get('/').location.endswith('/expiry/dashboard')
@@ -145,6 +145,35 @@ def test_dashboard_uses_ea_quantity_and_distinct_lots_with_drilldown(web):
     assert '비EA제품' in non_ea and '만료제품' not in non_ea
 
 
+def test_product_spec_location_and_available_warehouse_classification(web):
+    _, client = web; login(client)
+    commit(client, preview(client, 'mapping',
+                           '아마란스 품번\tICUBE 품번\nP1\t11BC025-01\nP2\t11BC026-01'))
+    commit(client, preview(client, 'rules', 'KEY값\tKEY값2\t유효기간\n11BC\t01\t3'))
+    stock = ('창고\t장소\t품번\t품명\t규격\t계정구분\tLOT No.\t기말재고\t재고단위\n'
+             '완제품 창고\tA-01\tP1\t임플란트A\t4.0×10\t제품\tXB240229C1001\t10\tEA\n'
+             '3공장 완제품 창고\tB-02\tP1\t임플란트A\t4.0×10\t제품\tXB240301C1002\t5\tEA\n'
+             '검사대기창고\tQ-01\tP2\t임플란트B\t5.0×12\t제품\tXB240401C1003\t7\tEA')
+    commit(client, preview(client, 'stock', stock, '2027-03-01'))
+
+    dashboard = client.get('/expiry/dashboard?as_of=2027-03-01').get_data(as_text=True)
+    assert '품목·규격별 유효기간 위험' in dashboard
+    assert '임플란트A' in dashboard and '4.0×10' in dashboard
+    assert '완제품 창고 / A-01' in dashboard and '3공장 완제품 창고 / B-02' in dashboard
+    assert '가용재고' in dashboard and '15 EA' in dashboard and '분류 필요' in dashboard and '7 EA' in dashboard
+
+    location = client.get('/expiry/inventory-location?as_of=2027-03-01').get_data(as_text=True)
+    assert '품목·규격별 재고 요약' in location and '창고·장소별 LOT 상세' in location
+    assert '임플란트B' in location and '5.0×12' in location and 'Q-01' in location
+    assert '기본 가용창고' in location and '분류 필요' in location
+
+    response = client.post('/expiry/warehouse-classes', data={
+        'warehouse_name': ['검사대기창고'], 'classification': ['unavailable']})
+    assert response.status_code == 302
+    location = client.get('/expiry/inventory-location?as_of=2027-03-01').get_data(as_text=True)
+    assert '비가용재고' in location and '7 <em>EA</em>' in location
+
+
 def test_reference_change_invalidates_pending_preview(web):
     app,client=web;login(client)
     a=preview(client,'mapping','아마란스 품번\tICUBE 품번\n0001\t11BC025-01')
@@ -166,7 +195,10 @@ def test_viewer_cannot_mutate_and_other_editor_cannot_commit_preview(web):
     assert client.post('/expiry/commit/'+pending).status_code==403
     login(client,'viewer')
     assert client.get('/expiry/').status_code==200
+    assert client.get('/expiry/inventory-location').status_code==200
     assert client.get('/expiry/references/mapping').status_code==200
+    assert client.get('/expiry/warehouse-classes').status_code==403
+    assert client.post('/expiry/warehouse-classes', data={}).status_code==403
     assert client.post('/expiry/import/mapping',data={'data':'bad'}).status_code==403
     assert client.post('/expiry/alerts',data={'day1':'10','day2':'20','day3':'30'}).status_code==403
 
