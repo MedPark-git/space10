@@ -182,3 +182,84 @@ def test_nonproduct_only_snapshot_replaces_previous_product_view_without_showing
     html = client.get('/expiry/').get_data(as_text=True)
     assert 'OLD_PRODUCT' not in html and 'SEMI_ONLY' not in html
     assert '조회 조건에 맞는 재고가 없습니다' in html
+
+
+def family_preview(client, prefix='42AP', days='730', enabled='1', reason='확정된 변경 사유'):
+    import re
+    html = client.get('/expiry/special-rules').get_data(as_text=True)
+    revision = re.search(r'name="revision" value="([a-f0-9]+)"', html).group(1)
+    response = client.post('/expiry/special-rules/preview', data={
+        'prefix':prefix, 'days':days, 'enabled':enabled, 'reason':reason, 'revision':revision})
+    assert response.status_code == 302
+    return response.location.rsplit('/',1)[-1]
+
+
+def test_special_rule_preview_commit_history_disable_and_audit(web):
+    from app import AuditLog
+    app, client = web; login(client)
+    commit(client, preview(client, 'mapping', '아마란스 품번\tICUBE 품번\nP1\t42AP100-99\nP2\t42AP100-01\nS1\t42AP100-12'))
+    source = ('창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\n'
+              'A\tB\tP1\tAP 제품\t제품\tSA240229P101\t2\n'
+              'A\tB\tP2\tLOT 확인대상\t제품\tBAD\t1\n'
+              'A\tB\tS1\t반제품\t반제품\tSA240229P101\t99\n'
+              'A\tB\tU1\t품번미등록\t제품\tSA240229P101\t1')
+    commit(client, preview(client, 'stock', source, '2026-09-16'))
+    pending_id = family_preview(client)
+    Import = app.extensions['expiry_models']['Import']; Reference = app.extensions['expiry_models']['Reference']
+    pending = db.session.get(Import, pending_id)
+    assert pending.committed_at is None and pending.notes['before']['days'] == 1095
+    assert pending.notes['impact']['targets'] == 2 and pending.notes['impact']['date_changes'] == 1
+    assert pending.notes['impact']['unresolved_before'] == pending.notes['impact']['unresolved_after'] == 1
+    assert pending.notes['impact']['unmapped_products'] == 1
+    assert db.session.scalar(select(Reference).where(Reference.kind=='family_rules')) is None
+    body = client.get('/expiry/special-rules/preview/'+pending_id).get_data(as_text=True)
+    assert '2027-02-27' in body and '2026-02-27' in body and '확인 후 적용 확정' in body
+    assert '대상 계열 여부를 판단할 수 없습니다' in body
+    commit(client, pending_id); commit(client, pending_id)
+    saved = db.session.scalar(select(Reference).where(Reference.kind=='family_rules', Reference.key=='42AP'))
+    assert saved.payload['days'] == 730 and saved.payload['enabled'] is True
+    logs = list(db.session.scalars(select(AuditLog).where(AuditLog.event=='expiry_special_rule_updated')))
+    assert len(logs) == 1 and '1095' in logs[0].detail and '730' in logs[0].detail
+    body = client.get('/expiry/special-rules?edit=42AP').get_data(as_text=True)
+    assert '확정된 변경 사유' in body and 'editor' in body and 'readonly' in body
+    disabled = family_preview(client, enabled='0', reason='일반 규칙으로 복귀')
+    commit(client, disabled)
+    body = client.get('/expiry/').get_data(as_text=True)
+    assert '규칙 미등록' in body and '확인 필요 사유' in body
+    saved = db.session.scalar(select(Reference).where(Reference.kind=='family_rules', Reference.key=='42AP'))
+    assert saved.payload['enabled'] is False
+
+
+@pytest.mark.parametrize('change', ['references', 'stock'])
+def test_special_rule_confirmation_blocks_stale_reference_or_latest_stock(web, change):
+    app, client = web; login(client)
+    pending = family_preview(client, prefix='99AB')
+    if change == 'references':
+        commit(client, preview(client, 'mapping', '아마란스 품번\tICUBE 품번\nP1\t99AB100-01'))
+    else:
+        commit(client, preview(client, 'stock', '창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\nA\tB\tP1\t제품\t제품\tSA240229P101\t1', '2026-09-17'))
+    html = client.get('/expiry/special-rules/preview/'+pending).get_data(as_text=True)
+    assert '확인 후 적용 확정' not in html and '다시 확인' in html
+    assert commit(client, pending).location.endswith('/expiry/special-rules')
+    Import = app.extensions['expiry_models']['Import']
+    assert db.session.get(Import, pending).committed_at is None
+
+
+def test_special_rules_role_owner_csrf_and_new_rule_without_inventory(web):
+    app, client = web
+    assert client.get('/expiry/special-rules').status_code == 302
+    login(client, 'viewer')
+    html = client.get('/expiry/special-rules').get_data(as_text=True)
+    assert '42AP' in html and '49AP' in html and '영향 미리보기' not in html
+    assert client.post('/expiry/special-rules/preview',data={}).status_code == 403
+    login(client)
+    pending = family_preview(client, prefix='99AB')
+    login(client,'admin')
+    assert client.get('/expiry/special-rules/preview/'+pending).status_code == 403
+    assert client.post('/expiry/commit/'+pending).status_code == 403
+    login(client)
+    assert '아직 확정된 재고가 없어' in client.get('/expiry/special-rules/preview/'+pending).get_data(as_text=True)
+    commit(client,pending)
+    assert '99AB' in client.get('/expiry/special-rules').get_data(as_text=True)
+    app.config['WTF_CSRF_ENABLED'] = True
+    assert client.post('/expiry/special-rules/preview',data={}).status_code == 400

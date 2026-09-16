@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block page_title %}특이사항 관리{% endblock %}
+{% block content %}
+<div class="page-heading"><div><h1>특이사항 관리</h1><p>품번 계열별 공통 유효기간과 개별 LOT 예외를 관리합니다.</p></div><a class="btn" href="{{ url_for('expiry.index') }}">유효기간 현황</a></div>
+<div class="expiry-links"><a class="btn" href="{{ url_for('expiry.reference_list',kind='exceptions') }}">특정 LOT 확정 날짜</a><a class="btn" href="{{ url_for('expiry.reference_list',kind='rules') }}">일반 규칙·MTS 제품명 연결</a></div>
+<section class="card">
+  <h2>품번 계열 공통 기간</h2>
+  <p>ICUBE 품번의 앞 4자리에 적용합니다. 끝자리(01, 02, CE 등)는 구분하지 않으며, 계산식은 <strong>LOT 생산일 + 유효일수 − 1일</strong>입니다. 생산일을 읽을 수 없으면 확인 필요로 표시합니다.</p>
+  <p><strong>적용 순서:</strong> 특정 LOT 확정 날짜 → 사용 중인 계열 공통 기간 → 일반 규칙. 사용 중지하면 해당 계열의 일반 규칙으로 돌아갑니다. MTS 사용기한에 일수를 더하는 기능이 아닙니다.</p>
+  <div class="table-wrap"><table class="expiry-table"><thead><tr><th>품번 앞자리</th><th>유효일수</th><th>사용 상태</th><th>최근 사유</th>{% if current_user.role in ['admin','editor'] %}<th>관리</th>{% endif %}</tr></thead><tbody>
+  {% for prefix, rule in rules|dictsort %}<tr><td><strong>{{ prefix }}</strong><small>끝자리 전체</small></td><td>{{ rule.days|num }}일</td><td>{{ '사용' if rule.enabled else '사용 중지' }}</td><td>{{ rule.reason }}</td>{% if current_user.role in ['admin','editor'] %}<td><a class="btn" href="{{ url_for('expiry.special_rules',edit=prefix) }}#rule-form">수정·사용 중지</a></td>{% endif %}</tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% if current_user.role in ['admin','editor'] %}
+<section class="card" id="rule-form"><h2>{{ '공통 규칙 수정' if edit else '공통 규칙 추가' }}</h2>
+  <form class="special-rule-form" method="post" action="{{ url_for('expiry.special_rule_preview_create') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="revision" value="{{ revision }}">
+    <div class="expiry-filters">
+      <label>ICUBE 품번 앞 4자리<input name="prefix" value="{{ values.prefix }}" maxlength="4" pattern="[A-Za-z0-9]{4}" required {{ 'readonly' if edit }} placeholder="예: 42AP"></label>
+      <label>유효일수<input type="number" name="days" value="{{ values.days }}" min="1" max="36500" step="1" required></label>
+      <label>사용 상태<select name="enabled"><option value="1" {{ 'selected' if values.enabled }}>사용</option><option value="0" {{ 'selected' if not values.enabled }}>사용 중지</option></select></label>
+    </div>
+    <label class="special-rule-reason">변경 사유<textarea name="reason" rows="3" maxlength="500" required placeholder="공통 적용 근거 또는 사용을 중지하는 이유를 입력해 주세요."></textarea></label>
+    <p>변경은 저장된 과거 재고의 재계산 결과에도 적용됩니다. 다음 화면에서 최신 재고에 미치는 영향을 확인한 뒤 확정합니다.</p>
+    <button class="btn primary">영향 미리보기</button>{% if edit %} <a class="btn" href="{{ url_for('expiry.special_rules') }}">새 규칙 추가</a>{% endif %}
+  </form>
+</section>
+{% endif %}
+<section class="card"><h2>최근 변경 이력</h2><p>초기 AP 4개 계열은 2026-09-16 확정한 기준입니다. 이후 등록·수정·사용 중지는 아래에 기록됩니다.</p>
+<div class="table-wrap"><table class="expiry-table"><thead><tr><th>변경 일시 / 담당자</th><th>계열</th><th>변경 전</th><th>변경 후</th><th>사유</th></tr></thead><tbody>
+{% for h in history %}{% set after=h.payload[0].data %}{% set before=h.notes.before %}<tr><td>{{ h.committed_at|kst }}<small>{{ h.notes.actor_name }}</small></td><td>{{ after.prefix }}</td><td>{% if before %}{{ before.days|num }}일 / {{ '사용' if before.enabled else '사용 중지' }}{% else %}미등록{% endif %}</td><td>{{ after.days|num }}일 / {{ '사용' if after.enabled else '사용 중지' }}</td><td>{{ after.reason }}</td></tr>{% else %}<tr><td colspan="5">추가 변경 이력이 없습니다.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

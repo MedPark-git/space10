@@ -11,7 +11,7 @@ from flask import Blueprint, Response, abort, flash, redirect, render_template, 
 from flask_login import current_user, login_required
 from sqlalchemy import select, text
 
-from expiry_engine import FORMATS, InputError, calculate, index_mts, iso_date, number, parse_paste, stock_scope, summarize
+from expiry_engine import FORMATS, InputError, calculate, family_rules, index_mts, iso_date, number, parse_family_rule, parse_paste, stock_scope, summarize
 
 
 def make_models(db):
@@ -47,7 +47,7 @@ def register_expiry(app, db, audit, roles):
     bp = Blueprint("expiry", __name__, url_prefix="/expiry")
 
     def references():
-        result = {}
+        result = {"family_rules": family_rules({})}
         for row in db.session.scalars(select(Reference).order_by(Reference.kind, Reference.key)):
             result.setdefault(row.kind, {})[row.key] = row.payload
         return result
@@ -65,6 +65,85 @@ def register_expiry(app, db, audit, roles):
         if snapshot_id:
             return db.session.scalar(stmt.where(Import.id == snapshot_id))
         return db.session.scalar(stmt.order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(1))
+
+    def latest_snapshot():
+        return db.session.scalar(select(Import).where(Import.kind == "stock", Import.committed_at.is_not(None))
+                                 .order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(1))
+
+    def rule_impact(proposed, refs, snapshot, as_of):
+        products, scope = stock_scope(snapshot.payload if snapshot else [])
+        before_refs = index_mts(refs)
+        after_refs = index_mts({**refs, "family_rules": {**refs["family_rules"], proposed["prefix"]: proposed}})
+        impact = {"targets": 0, "date_changes": 0, "unresolved_before": 0, "unresolved_after": 0,
+                  "unknown_accounts": scope["계정구분 미확인 제외"], "unmapped_products": 0, "examples": []}
+        for entry in products:
+            row = entry["data"]
+            mapping = refs.get("mapping", {}).get(row["erp"], {})
+            if number(row["quantity"]) != 0 and (not mapping or mapping.get("icube") in {"미관리", "미관", "N/A", "#N/A"}):
+                impact["unmapped_products"] += 1
+            if not mapping.get("icube", "").startswith(proposed["prefix"]) or number(row["quantity"]) == 0:
+                continue
+            before = calculate(row, before_refs, as_of)
+            after = calculate(row, after_refs, as_of)
+            impact["targets"] += 1
+            impact["date_changes"] += before["expiry"] != after["expiry"]
+            impact["unresolved_before"] += bool(before["error"])
+            impact["unresolved_after"] += bool(after["error"])
+            if len(impact["examples"]) < 30:
+                impact["examples"].append({"name": row["name"], "icube": mapping["icube"], "lot": row["lot"],
+                                            "before": before["expiry"] or before["error"],
+                                            "after": after["expiry"] or after["error"], "source": after["source"]})
+        return impact
+
+    @bp.get("/special-rules")
+    @login_required
+    def special_rules():
+        refs = references()
+        edit = request.args.get("edit", "").strip().upper()
+        if edit and edit not in refs["family_rules"]:
+            abort(404)
+        values = refs["family_rules"].get(edit, {"prefix": "", "days": 1095, "enabled": True})
+        history = db.session.scalars(select(Import).where(Import.kind == "family_rules", Import.committed_at.is_not(None))
+                                    .order_by(Import.committed_at.desc()).limit(20)).all()
+        return render_template("expiry_special_rules.html", rules=refs["family_rules"], values=values,
+                               edit=edit, revision=revision(refs), history=history)
+
+    @bp.post("/special-rules/preview")
+    @roles("admin", "editor")
+    def special_rule_preview_create():
+        try:
+            proposed = parse_family_rule(request.form)
+            refs = references()
+            if request.form.get("revision") != revision(refs):
+                raise InputError("화면을 연 뒤 기준정보가 바뀌었습니다. 새로 열린 화면에서 변경 내용을 다시 입력해 주세요.")
+            snapshot = latest_snapshot()
+            as_of = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Seoul")).date()
+            impact = rule_impact(proposed, refs, snapshot, as_of)
+            pending = Import(kind="family_rules", payload=[{"key": proposed["prefix"], "data": proposed}],
+                             notes={"before": refs["family_rules"].get(proposed["prefix"]), "impact": impact,
+                                    "snapshot_id": snapshot.id if snapshot else None,
+                                    "snapshot_date": snapshot.as_of.isoformat() if snapshot else None,
+                                    "actor_name": current_user.name},
+                             base_revision=revision(refs), as_of=as_of, created_by=current_user.id)
+            db.session.add(pending)
+            db.session.commit()
+            return redirect(url_for("expiry.special_rule_preview", import_id=pending.id))
+        except InputError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("expiry.special_rules"))
+
+    @bp.get("/special-rules/preview/<import_id>")
+    @roles("admin", "editor")
+    def special_rule_preview(import_id):
+        pending = db.get_or_404(Import, import_id)
+        if pending.kind != "family_rules":
+            abort(404)
+        if pending.created_by != current_user.id:
+            abort(403)
+        snapshot = latest_snapshot()
+        stale = pending.base_revision != revision(references()) or pending.notes["snapshot_id"] != (snapshot.id if snapshot else None)
+        return render_template("expiry_special_preview.html", pending=pending, proposed=pending.payload[0]["data"],
+                               before=pending.notes["before"], impact=pending.notes["impact"], stale=stale)
 
     def current_view():
         refs = references()
@@ -141,6 +220,8 @@ def register_expiry(app, db, audit, roles):
         pending = db.get_or_404(Import, import_id)
         if pending.created_by != current_user.id:
             abort(403)
+        if pending.kind == "family_rules":
+            return redirect(url_for("expiry.special_rule_preview", import_id=pending.id))
         refs = references()
         entries, scope = stock_scope(pending.payload) if pending.kind == "stock" else (pending.payload, {})
         changes = [{"key": e["key"], "before": refs.get(pending.kind, {}).get(e["key"]), "after": e["data"]} for e in entries]
@@ -164,10 +245,18 @@ def register_expiry(app, db, audit, roles):
             abort(403)
         if pending.committed_at:
             flash("이미 등록된 자료입니다. 중복 등록하지 않았습니다.", "success")
-            return redirect(url_for("expiry.index"))
+            return redirect(url_for("expiry.special_rules" if pending.kind == "family_rules" else "expiry.index"))
         if pending.base_revision != revision(references()):
+            if pending.kind == "family_rules":
+                flash("미리보기 이후 기준정보가 변경되었습니다. 특이사항 관리에서 적용 영향을 다시 확인해 주세요.", "error")
+                return redirect(url_for("expiry.special_rules"))
             flash("미리보기 이후 기준정보가 변경되었습니다. 자료를 다시 붙여넣어 확인해 주세요.", "error")
             return redirect(url_for("expiry.import_data", kind=pending.kind))
+        if pending.kind == "family_rules":
+            snapshot = latest_snapshot()
+            if pending.notes["snapshot_id"] != (snapshot.id if snapshot else None):
+                flash("미리보기 이후 최신 재고가 바뀌었습니다. 적용 영향을 다시 확인해 주세요.", "error")
+                return redirect(url_for("expiry.special_rules"))
         if pending.kind == "stock" and any("account" not in e["data"] for e in pending.payload):
             flash("계정구분이 없는 이전 미리보기입니다. 계정구분 열을 포함해 재고를 다시 붙여넣어 주세요.", "error")
             return redirect(url_for("expiry.import_data", kind="stock"))
@@ -183,9 +272,18 @@ def register_expiry(app, db, audit, roles):
                 row.updated_by = current_user.id
                 row.updated_at = now
         pending.committed_at = now
-        audit("expiry_import_committed", target_type="expiry_import", target_id=pending.id,
-              detail=f"{pending.kind}:{len(pending.payload)}", commit=False)
+        if pending.kind == "family_rules":
+            audit("expiry_special_rule_updated", target_type="expiry_import", target_id=pending.id,
+                  detail=json.dumps({"before": pending.notes["before"], "after": pending.payload[0]["data"],
+                                     "snapshot_id": pending.notes["snapshot_id"],
+                                     "date_changes": pending.notes["impact"]["date_changes"]}, ensure_ascii=False), commit=False)
+        else:
+            audit("expiry_import_committed", target_type="expiry_import", target_id=pending.id,
+                  detail=f"{pending.kind}:{len(pending.payload)}", commit=False)
         db.session.commit()
+        if pending.kind == "family_rules":
+            flash("품번 계열 공통 규칙을 반영했습니다. 변경 이력에서 이전 기준을 확인할 수 있습니다.", "success")
+            return redirect(url_for("expiry.special_rules"))
         flash(f"{FORMATS[pending.kind][0]} {len(pending.payload):,}건이 등록되었습니다.", "success")
         return redirect(url_for("expiry.index", **({"snapshot": pending.id} if pending.kind == "stock" else {})))
 

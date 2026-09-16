@@ -1,7 +1,7 @@
 from datetime import date
 import pytest
 
-from expiry_engine import InputError, calculate, parse_paste, summarize, stock_scope, product_matches
+from expiry_engine import InputError, calculate, parse_paste, summarize, stock_scope, product_matches, family_rules, parse_family_rule
 
 
 def stock(erp="0001", lot="XB240229C1001", name="BONE XB"):
@@ -144,7 +144,7 @@ def test_account_header_is_required_and_missing_legacy_account_is_not_assumed_pr
     assert calculate(row, base_refs(), date(2026,9,16))['status'] == '집계 제외'
 
 
-@pytest.mark.parametrize('prefix', ['39FD', '42AP', '48AP'])
+@pytest.mark.parametrize('prefix', ['39FD', '42SP', '48SP'])
 def test_factory_3_suffix_rules_are_preserved_and_override_common_rules(prefix):
     entries, _ = parse_paste('rules', f'공장\t앞자리 KEY\t끝자리 KEY\t유효일수\tMTS 제품구분\n3\t{prefix}\t01\t1095\tS GEN\n3\t{prefix}\t12\t1095\tHAHA GEN INJECT\n3\t{prefix}\t*\t1095\tOTHER')
     refs = {'mapping':{'0001':{'icube':prefix+'100-12'}}, 'rules':{e['key']:e['data'] for e in entries},
@@ -186,3 +186,50 @@ def test_41_tibialis_uses_common_mts_without_direction_and_conflicts_are_flagged
     assert result['expiry'] is None and '충돌' in result['error']
     refs['mapping']['0001']['icube'] = '42TB100-12'
     assert '규칙 미등록' in calculate(row, refs, date(2026,9,16))['error']
+
+
+@pytest.mark.parametrize('prefix', ['42AP', '44AP', '48AP', '49AP'])
+@pytest.mark.parametrize('suffix', ['01', '12', 'CE', 'ZZ'])
+def test_ap_1095_days_include_production_date_for_every_suffix(prefix, suffix):
+    refs = {'mapping': {'0001': {'icube':prefix+'100-'+suffix}},
+            'rules': {prefix+'|'+suffix: {'factory':'1·2', 'days':1825}}}
+    result = calculate(stock(lot='SA240229P101'), refs, date(2026,9,16))
+    assert result['expiry'] == '2027-02-27'
+    assert '1095일' in result['source'] and '끝자리 무관' in result['source']
+
+
+def test_ap_without_registered_rule_works_but_unknown_production_date_never_uses_mts():
+    refs = {'mapping':{'0001':{'icube':'42AP100-NEW'}}}
+    assert calculate(stock(lot='SA240229P101'), refs, date(2026,9,16))['expiry'] == '2027-02-27'
+    refs['rules'] = {'42AP|*': {'factory':'3', 'days':1095, 'product':'AP'}}
+    refs['mts'] = {'AP|240039SA': {'product':'AP', 'lot':'240039SA', 'expiry':'2028-01-01'}}
+    result = calculate(stock(lot='240039SA'), refs, date(2026,9,16))
+    assert result['expiry'] is None and '생산일 LOT 형식' in result['error']
+
+
+def test_disabling_default_common_rule_restores_normal_rule_and_does_not_reactivate_default():
+    refs = {'mapping':{'0001':{'icube':'42AP100-01'}},
+            'rules':{'42AP|01':{'factory':'1·2','days':365}},
+            'family_rules':{'42AP':{'prefix':'42AP','days':1095,'enabled':False,'reason':'검증 후 중지'}}}
+    assert family_rules(refs)['42AP']['enabled'] is False
+    assert calculate(stock(lot='SA240229P101'), refs, date(2026,9,16))['expiry'] == '2025-02-27'
+    refs['rules'] = {}
+    assert '규칙 미등록' in calculate(stock(lot='SA240229P101'), refs, date(2026,9,16))['error']
+
+
+def test_specific_lot_exception_wins_over_common_period_and_normal_rule_conflicts():
+    refs = {'mapping':{'0001':{'icube':'42AP100-01'}},
+            'rules':{'42AP|01':{'factory':'1·2','days':365},'42AP|*':{'factory':'3','product':'AP','days':365}},
+            'exceptions':{'0001|BAD':{'expiry':'2028-01-01','reason':'개별 확정'}}}
+    assert calculate(stock(lot='BAD'), refs, date(2026,9,16))['expiry'] == '2028-01-01'
+    refs['mapping']['0001']['icube'] = '11BC100-01'
+    refs['rules'] = {'11BC|01':{'factory':'1·2','days':365},'11BC|*':{'factory':'3','days':365,'product':'OTHER'}}
+    assert calculate(stock(lot='BAD'), refs, date(2026,9,16))['expiry'] == '2028-01-01'
+    refs['exceptions'] = {}
+    assert '충돌' in calculate(stock(), refs, date(2026,9,16))['error']
+
+
+@pytest.mark.parametrize('change', [{'prefix':'42'}, {'days':'3.0'}, {'days':'0'}, {'days':'36501'}, {'reason':''}, {'enabled':'bad'}])
+def test_family_rule_form_rejects_ambiguous_or_incomplete_input(change):
+    with pytest.raises(InputError):
+        parse_family_rule({'prefix':'42AP','days':'1095','enabled':'1','reason':'확정한 공통 규칙',**change})

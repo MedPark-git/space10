@@ -20,6 +20,36 @@ FORMATS = {
 }
 
 
+DEFAULT_FAMILY_RULES = {
+    prefix: {"prefix": prefix, "days": 1095, "enabled": True,
+             "reason": "2026-09-16 확정: 끝자리 구분 없이 생산일 포함 1,095일 적용"}
+    for prefix in ("42AP", "44AP", "48AP", "49AP")
+}
+
+
+def family_rules(refs):
+    return {**{key: dict(value) for key, value in DEFAULT_FAMILY_RULES.items()},
+            **refs.get("family_rules", {})}
+
+
+def parse_family_rule(form):
+    prefix = clean(form.get("prefix")).upper()
+    if not re.fullmatch(r"[A-Z0-9]{4}", prefix):
+        raise InputError("품번 앞자리는 ICUBE 품번의 영문·숫자 4자리로 입력해 주세요.")
+    try:
+        days = int(clean(form.get("days")))
+    except ValueError as exc:
+        raise InputError("유효일수는 정수로 입력해 주세요.") from exc
+    if not 1 <= days <= 36500:
+        raise InputError("유효일수는 1~36,500일 범위로 입력해 주세요.")
+    reason = clean(form.get("reason"))
+    if not reason or len(reason) > 500:
+        raise InputError("변경 사유를 1~500자로 입력해 주세요.")
+    if form.get("enabled") not in {"0", "1"}:
+        raise InputError("사용 상태를 선택해 주세요.")
+    return {"prefix": prefix, "days": days, "enabled": form.get("enabled") == "1", "reason": reason}
+
+
 def clean(value):
     return str(value or "").strip().lstrip("\ufeff")
 
@@ -223,9 +253,10 @@ def calculate(row, refs, as_of, thresholds=(90, 180, 365)):
     result["icube"] = icube
     rules = refs.get("rules", {})
     exact, family = rules.get(icube[:4] + "|" + icube[-2:]), rules.get(icube[:4] + "|*")
-    if exact and family and (exact["factory"] != "3" or family["factory"] != "3"):
-        return fail("공장 규칙 충돌")
     rule = exact or family
+    common = refs.get("family_rules", {}).get(icube[:4], DEFAULT_FAMILY_RULES.get(icube[:4]))
+    if common and not common.get("enabled"):
+        common = None
     # The owner explicitly groups all 41-series Tibialis tendons, regardless of anterior/posterior.
     tibialis = icube.startswith("41") and (has_tibialis(row["name"]) or (rule and has_tibialis(rule.get("product", ""))))
     if tibialis:
@@ -235,8 +266,11 @@ def calculate(row, refs, as_of, thresholds=(90, 180, 365)):
         expiry = iso_date(exception["expiry"])
         result["source"] = "LOT 예외: " + exception["reason"]
         result["factory"] = rule["factory"] if rule else "예외"
-    elif rule and rule["factory"] == "1·2":
-        result["factory"] = "1·2"
+    elif common or (rule and rule["factory"] == "1·2"):
+        if not common and exact and family:
+            return fail("공장 규칙 충돌")
+        result["factory"] = rule["factory"] if rule else ""
+        duration = common["days"] if common else rule["days"]
         legacy_xbp = bool(re.fullmatch(r"XBP\d{6}[A-Z0-9]+", row["lot"]))
         if not legacy_xbp and not re.fullmatch(r"[A-Z]{2}\d{6}[A-Z0-9]+", row["lot"]):
             return fail("생산일 LOT 형식 확인 필요")
@@ -245,11 +279,15 @@ def calculate(row, refs, as_of, thresholds=(90, 180, 365)):
             manufactured = date(2000 + int(raw[:2]), int(raw[2:4]), int(raw[4:]))
         except ValueError:
             return fail("생산일 오류")
-        expiry = manufactured + timedelta(days=rule["days"] - 1)
-        result["source"] = f"생산일 {manufactured} + {rule['days']}일 − 1일"
+        expiry = manufactured + timedelta(days=duration - 1)
+        result["source"] = f"생산일 {manufactured} + {duration}일 − 1일"
+        if common:
+            result["source"] = f"계열 공통 {icube[:4]} (끝자리 무관) · " + result["source"]
         if legacy_xbp:
             result["source"] += " (기존 XBP 예외: 4~9자리 생산일)"
     elif rule and rule["factory"] == "3":
+        if exact and family and (exact["factory"] != "3" or family["factory"] != "3"):
+            return fail("공장 규칙 충돌")
         result["factory"] = "3"
         try:
             lot = mts_lot(row["lot"])
@@ -278,6 +316,7 @@ def calculate(row, refs, as_of, thresholds=(90, 180, 365)):
 
 def summarize(rows):
     counts = Counter()
+    issues = Counter()
     quantities = {}
     for row in rows:
         if not is_finished_product(row):
@@ -286,6 +325,8 @@ def summarize(rows):
         if qty == 0:
             continue
         counts[row["status"]] += 1
+        if row.get("error"):
+            issues[row["error"].split(":", 1)[0]] += 1
         key = row["status"] + " / " + row["unit"]
         quantities[key] = str(number(quantities.get(key)) + qty)
-    return {"counts": dict(counts), "quantities": quantities}
+    return {"counts": dict(counts), "quantities": quantities, "issues": dict(issues)}
