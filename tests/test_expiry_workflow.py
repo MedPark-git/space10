@@ -116,6 +116,35 @@ def test_operational_pages_use_expiry_snapshot_and_never_show_nonproducts(web):
     assert client.post('/movements', data={}).status_code == 404
 
 
+def test_dashboard_uses_ea_quantity_and_distinct_lots_with_drilldown(web):
+    _, client = web; login(client)
+    commit(client, preview(client, 'mapping',
+                           '아마란스 품번\tICUBE 품번\n0001\t11BC025-01\n0002\t11BC026-01'))
+    commit(client, preview(client, 'rules', 'KEY값\tKEY값2\t유효기간\n11BC\t01\t3'))
+    stock = ('창고\t장소\t품번\t품명\t계정구분\tLOT No.\t기말재고\t재고단위\n'
+             'A창고\tA\t0001\t만료제품\t제품\tXB240229C1001\t2\tEA\n'
+             'B창고\tB\t0001\t만료제품\t제품\tXB240229C1001\t3\tEA\n'
+             'A창고\tA\t0002\t단기제품\t제품\tXB240401C1001\t7\tEA\n'
+             'A창고\tA\t0003\t확인제품\t제품\tBAD\t11\tEA\n'
+             'A창고\tA\t0004\t비EA제품\t제품\tBAD2\t4\tKG\n'
+             'A창고\tA\t0005\t음수제품\t제품\tBAD3\t-2\tEA')
+    commit(client, preview(client, 'stock', stock, '2027-03-01'))
+
+    dashboard = client.get('/expiry/dashboard?as_of=2027-03-01').get_data(as_text=True)
+    assert '만료·오늘 만료 재고' in dashboard
+    assert '5 EA' in dashboard and '90일 이내 재고' in dashboard and '7 EA' in dashboard
+    assert '계산 확인 필요 재고' in dashboard and '11 EA' in dashboard
+    assert '전체 제품 재고' in dashboard and '23 <em>EA</em>' in dashboard
+    assert 'EA 외·단위 미확인 LOT 1개' in dashboard and '음수재고 2 EA · LOT 1개' in dashboard
+
+    expired = client.get('/expiry/?bucket=expired&as_of=2027-03-01').get_data(as_text=True)
+    assert '현재 상세조건: 만료' in expired
+    assert expired.count('XB240229C1001') == 2
+    assert '단기제품' not in expired and '비EA제품' not in expired
+    non_ea = client.get('/expiry/?bucket=non_ea&as_of=2027-03-01').get_data(as_text=True)
+    assert '비EA제품' in non_ea and '만료제품' not in non_ea
+
+
 def test_reference_change_invalidates_pending_preview(web):
     app,client=web;login(client)
     a=preview(client,'mapping','아마란스 품번\tICUBE 품번\n0001\t11BC025-01')
