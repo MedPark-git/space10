@@ -4,7 +4,6 @@ import hashlib
 import io
 import json
 import uuid
-from collections import Counter
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -164,12 +163,26 @@ def register_expiry(app, db, audit, roles):
         q = request.args.get("q", "").strip().casefold()
         bucket = request.args.get("bucket", "")
         def in_bucket(row):
+            quantity = number(row["quantity"])
+            unit = (row.get("unit") or "").strip().upper()
+            if bucket == "all_ea":
+                return unit == "EA" and quantity > 0
+            if bucket == "negative":
+                return quantity < 0
+            if bucket == "non_ea":
+                return quantity > 0 and unit != "EA"
             if bucket == "expired":
-                return not row["error"] and row["remaining"] is not None and row["remaining"] <= 0
+                return unit == "EA" and quantity > 0 and not row["error"] and row["remaining"] is not None and row["remaining"] <= 0
             if bucket == "due90":
-                return not row["error"] and row["remaining"] is not None and 0 < row["remaining"] <= 90
+                return unit == "EA" and quantity > 0 and not row["error"] and row["remaining"] is not None and 0 < row["remaining"] <= 90
+            if bucket == "due180":
+                return unit == "EA" and quantity > 0 and not row["error"] and row["remaining"] is not None and 90 < row["remaining"] <= 180
+            if bucket == "due365":
+                return unit == "EA" and quantity > 0 and not row["error"] and row["remaining"] is not None and 180 < row["remaining"] <= 365
+            if bucket == "safe":
+                return unit == "EA" and quantity > 0 and not row["error"] and row["remaining"] is not None and row["remaining"] > 365
             if bucket == "issue":
-                return bool(row["error"])
+                return unit == "EA" and quantity > 0 and bool(row["error"])
             return True
         filtered = [r for r in rows if
                     (request.args.get("zero") == "1" or number(r["quantity"]) != 0)
@@ -200,31 +213,78 @@ def register_expiry(app, db, audit, roles):
     def active_rows(rows):
         return [row for row in rows if number(row["quantity"]) != 0]
 
+    bucket_definitions = [
+        ("expired", "만료"), ("due90", "1~90일"), ("due180", "91~180일"),
+        ("due365", "181~365일"), ("safe", "365일 초과"), ("issue", "확인 필요"),
+    ]
+
+    def is_positive_ea(row):
+        return (row.get("unit") or "").strip().upper() == "EA" and number(row["quantity"]) > 0
+
+    def distinct_lots(rows):
+        keys = set()
+        for index, row in enumerate(rows):
+            lot = (row.get("lot") or "").strip()
+            key = (row.get("erp"), lot) if lot else (row.get("erp"), "LOT 없음", row.get("warehouse"), row.get("location"), index)
+            keys.add(key)
+        return len(keys)
+
+    def inventory_stat(rows):
+        ea_rows = [row for row in rows if is_positive_ea(row)]
+        return {"quantity": sum((number(row["quantity"]) for row in ea_rows), number(0)),
+                "lots": distinct_lots(ea_rows), "rows": len(ea_rows),
+                "products": len({row["erp"] for row in ea_rows})}
+
+    def inventory_buckets(rows):
+        result = []
+        for key, label in bucket_definitions:
+            group = [row for row in rows if action_bucket(row) == label]
+            result.append({"key": key, "label": label, **inventory_stat(group)})
+        maximum = max([entry["quantity"] for entry in result] + [number(1)])
+        for entry in result:
+            entry["percent"] = float(entry["quantity"] * 100 / maximum) if maximum else 0
+        return result
+
+    def data_quality_stats(rows):
+        negative = [row for row in rows if number(row["quantity"]) < 0]
+        non_ea = [row for row in rows if number(row["quantity"]) > 0 and (row.get("unit") or "").strip().upper() != "EA"]
+        by_unit = []
+        for unit in sorted({(row.get("unit") or "").strip().upper() or "단위 미확인" for row in non_ea}):
+            group = [row for row in non_ea if ((row.get("unit") or "").strip().upper() or "단위 미확인") == unit]
+            by_unit.append({"unit": unit, "quantity": sum((number(row["quantity"]) for row in group), number(0)),
+                            "lots": distinct_lots(group)})
+        return {"negative": {"quantity": abs(sum((number(row["quantity"]) for row in negative), number(0))),
+                              "lots": distinct_lots(negative)},
+                "non_ea": by_unit, "non_ea_lots": distinct_lots(non_ea)}
+
     @bp.get("/dashboard")
     @login_required
     def dashboard():
         refs, snapshot, as_of, summary, _, _, rows = current_view()
         active = active_rows(rows)
-        buckets = Counter(action_bucket(row) for row in active)
-        priority = sorted((row for row in active if row["error"] or (row["remaining"] is not None and row["remaining"] <= 90)),
+        buckets = inventory_buckets(active)
+        bucket_map = {entry["key"]: entry for entry in buckets}
+        total_stats = inventory_stat(active)
+        quality = data_quality_stats(active)
+        priority = sorted((row for row in active if is_positive_ea(row) and (row["error"] or (row["remaining"] is not None and row["remaining"] <= 90))),
                           key=lambda row: (0 if row["remaining"] is not None and row["remaining"] <= 0 else
                                            1 if row["remaining"] is not None and row["remaining"] <= 90 else 2,
                                            row["remaining"] if row["remaining"] is not None else 999999,
                                            row["name"], row["lot"]))[:15]
         warehouse_risk = []
-        for warehouse in sorted({row["warehouse"] or "미지정" for row in active}):
-            group = [row for row in active if (row["warehouse"] or "미지정") == warehouse]
-            warehouse_risk.append({"name": warehouse, "total": len(group),
-                                   "expired": sum(action_bucket(row) == "만료" for row in group),
-                                   "due90": sum(action_bucket(row) == "1~90일" for row in group),
-                                   "issues": sum(action_bucket(row) == "확인 필요" for row in group)})
-        warehouse_risk.sort(key=lambda row: (row["expired"] + row["due90"] + row["issues"], row["total"]), reverse=True)
-        metrics = {"rows": len(active), "products": len({row["erp"] for row in active}),
-                   "expired": buckets["만료"], "due90": buckets["1~90일"],
-                   "unresolved": buckets["확인 필요"]}
+        ea_rows = [row for row in active if is_positive_ea(row)]
+        for warehouse in sorted({row["warehouse"] or "미지정" for row in ea_rows}):
+            group = [row for row in ea_rows if (row["warehouse"] or "미지정") == warehouse]
+            warehouse_risk.append({"name": warehouse, "total": inventory_stat(group),
+                                   "expired": inventory_stat([row for row in group if action_bucket(row) == "만료"]),
+                                   "due90": inventory_stat([row for row in group if action_bucket(row) == "1~90일"]),
+                                   "issues": inventory_stat([row for row in group if action_bucket(row) == "확인 필요"])})
+        warehouse_risk.sort(key=lambda row: (row["expired"]["quantity"] + row["due90"]["quantity"] + row["issues"]["quantity"],
+                                                    row["total"]["quantity"]), reverse=True)
         return render_template("expiry_dashboard.html", snapshot=snapshot, as_of=as_of, summary=summary,
-                               metrics=metrics, buckets=buckets, max_bucket=max([*buckets.values(), 1]), priority=priority,
-                               warehouse_risk=warehouse_risk[:8],
+                               metrics={"expired": bucket_map["expired"], "due90": bucket_map["due90"],
+                                        "unresolved": bucket_map["issue"], "total": total_stats},
+                               buckets=buckets, priority=priority, quality=quality, warehouse_risk=warehouse_risk[:8],
                                ref_counts={kind: len(refs.get(kind, {})) for kind in FORMATS if kind != "stock"})
 
     @bp.get("/master-data")
@@ -247,27 +307,28 @@ def register_expiry(app, db, audit, roles):
     def analysis():
         _, snapshot, as_of, summary, _, _, rows = current_view()
         active = active_rows(rows)
-        bucket_order = ["만료", "1~90일", "91~180일", "181~365일", "365일 초과", "확인 필요"]
-        bucket_counts = Counter(action_bucket(row) for row in active)
-        buckets = [(label, bucket_counts[label]) for label in bucket_order]
+        buckets = inventory_buckets(active)
+        quality = data_quality_stats(active)
         warehouses = []
-        for warehouse in sorted({row["warehouse"] or "미지정" for row in active}):
-            group = [row for row in active if (row["warehouse"] or "미지정") == warehouse]
-            warehouses.append({"name": warehouse, "total": len(group),
-                               "expired": sum(action_bucket(row) == "만료" for row in group),
-                               "due90": sum(action_bucket(row) == "1~90일" for row in group),
-                               "due180": sum(action_bucket(row) == "91~180일" for row in group),
-                               "issues": sum(action_bucket(row) == "확인 필요" for row in group)})
-        warehouses.sort(key=lambda row: (row["expired"], row["due90"], row["issues"], row["total"]), reverse=True)
+        ea_rows = [row for row in active if is_positive_ea(row)]
+        for warehouse in sorted({row["warehouse"] or "미지정" for row in ea_rows}):
+            group = [row for row in ea_rows if (row["warehouse"] or "미지정") == warehouse]
+            warehouses.append({"name": warehouse, "total": inventory_stat(group),
+                               "expired": inventory_stat([row for row in group if action_bucket(row) == "만료"]),
+                               "due90": inventory_stat([row for row in group if action_bucket(row) == "1~90일"]),
+                               "due180": inventory_stat([row for row in group if action_bucket(row) == "91~180일"]),
+                               "issues": inventory_stat([row for row in group if action_bucket(row) == "확인 필요"])})
+        warehouses.sort(key=lambda row: (row["expired"]["quantity"], row["due90"]["quantity"],
+                                           row["issues"]["quantity"], row["total"]["quantity"]), reverse=True)
         product_groups = {}
         for row in active:
             if not row["error"] and (row["remaining"] is None or row["remaining"] > 365):
                 continue
             key = (row["erp"], row["name"], row["unit"])
             group = product_groups.setdefault(key, {"erp": row["erp"], "name": row["name"], "unit": row["unit"],
-                                                     "lots": 0, "quantity": number(0), "expired": 0,
+                                                     "lot_keys": set(), "quantity": number(0), "expired": 0,
                                                      "due90": 0, "issues": 0, "nearest": None})
-            group["lots"] += 1
+            group["lot_keys"].add((row["erp"], row["lot"] or (row["warehouse"], row["location"])))
             group["quantity"] += number(row["quantity"])
             bucket = action_bucket(row)
             group["expired"] += bucket == "만료"
@@ -275,15 +336,23 @@ def register_expiry(app, db, audit, roles):
             group["issues"] += bucket == "확인 필요"
             if row["remaining"] is not None:
                 group["nearest"] = row["remaining"] if group["nearest"] is None else min(group["nearest"], row["remaining"])
+        for group in product_groups.values():
+            group["lots"] = len(group.pop("lot_keys"))
         products = sorted(product_groups.values(), key=lambda group: (0 if group["expired"] else 1,
                            0 if group["due90"] else 1, 0 if group["issues"] else 1,
                            group["nearest"] if group["nearest"] is not None else 999999,
                            group["name"]))[:30]
-        factories = Counter((row["factory"] + "공장") if row["factory"] else "미확인" for row in active)
-        issues = Counter(row["error"] for row in active if row["error"])
+        factories = []
+        for label in sorted({(row["factory"] + "공장") if row["factory"] else "미확인" for row in ea_rows}):
+            group = [row for row in ea_rows if ((row["factory"] + "공장") if row["factory"] else "미확인") == label]
+            factories.append({"label": label, **inventory_stat(group)})
+        issues = []
+        for label in sorted({row["error"] for row in ea_rows if row["error"]}):
+            group = [row for row in ea_rows if row["error"] == label]
+            issues.append({"label": label, **inventory_stat(group)})
         return render_template("expiry_analysis_data.html", snapshot=snapshot, as_of=as_of, summary=summary,
                                total=len(active), buckets=buckets, warehouses=warehouses, products=products,
-                               factories=factories.most_common(), issues=issues.most_common())
+                               factories=factories, issues=issues, quality=quality)
 
     @bp.get("/")
     @login_required
@@ -295,10 +364,19 @@ def register_expiry(app, db, audit, roles):
         args = request.args.to_dict()
         args.pop("page", None)
         history = db.session.scalars(select(Import).where(Import.kind == "stock", Import.committed_at.is_not(None)).order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(100)).all()
+        active = active_rows(rows)
+        selected_bucket = request.args.get("bucket", "")
+        selected_bucket_label = dict(bucket_definitions + [
+            ("all_ea", "전체 양수 EA 재고"), ("negative", "음수재고"),
+            ("non_ea", "EA 외·단위 미확인 재고"),
+        ]).get(selected_bucket)
         return render_template("expiry.html", rows=rows[(page-1)*100:page*100], total=len(rows), page=page, pages=pages,
                                previous_url=url_for("expiry.index", **args, page=page-1), next_url=url_for("expiry.index", **args, page=page+1),
                                export_url=url_for("expiry.export", **args), history=history, snapshot=snapshot,
                                as_of=as_of, summary=summary, warehouses=warehouses, statuses=statuses,
+                               inventory_buckets=inventory_buckets(active), inventory_total=inventory_stat(active),
+                               quality=data_quality_stats(active),
+                               selected_bucket=selected_bucket, selected_bucket_label=selected_bucket_label,
                                ref_counts={k: len(v) for k, v in refs.items()}, formats=FORMATS)
 
     @bp.route("/import/<kind>", methods=["GET", "POST"])
