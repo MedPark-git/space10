@@ -105,7 +105,7 @@ class AuditLog(db.Model):
 
 class HealthProbe(db.Model):
     __tablename__ = "health_probes"
-    id = db.Column(db.String(36), primary_key=True, default=uuid_str)
+    id = db.Column(db.String(36), primary_key=True)
     checked_at = db.Column(db.DateTime(timezone=True), nullable=False, default=utcnow)
 
 
@@ -165,6 +165,8 @@ def create_app(test_config=None):
     register_errors(app)
     from expiry_feature import register_expiry
     register_expiry(app, db, audit, roles)
+    from dashboard_feature_v2 import register_dashboard_context
+    register_dashboard_context(app, db)
     app.jinja_env.filters["kst"] = lambda value: value.astimezone(KST).strftime("%Y-%m-%d %H:%M") if value else "-"
     app.jinja_env.filters["num"] = lambda value: f"{float(value or 0):,.0f}"
 
@@ -244,7 +246,7 @@ def register_routes(app):
         try:
             db.session.execute(text("SELECT 1"))
             nested = db.session.begin_nested()
-            db.session.add(HealthProbe())
+            db.session.add(HealthProbe(id=uuid_str()))
             db.session.flush()
             nested.rollback()
             db.session.rollback()
