@@ -1,4 +1,4 @@
 from app import app, db
-from dashboard_feature import register_dashboard_context
+from dashboard_feature_v2 import register_dashboard_context
 
 register_dashboard_context(app, db)
