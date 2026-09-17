@@ -1,116 +1,83 @@
 {% extends 'base.html' %}
 {% block page_title %}재고 통합 대시보드{% endblock %}
-{% block breadcrumb %}제품 재고 · 유효기간 · 정체재고{% endblock %}
+{% block breadcrumb %}제품 재고 · 유효기간 · 창고별 현황{% endblock %}
 {% block content %}
-{% if not dashboard2 or not dashboard2.snapshot %}
-<section class="card empty-state"><h2>등록된 ERP 재고가 없습니다</h2><p>ERP 재고를 등록하면 제품 재고 현황과 유효기간 관리 현황이 자동으로 생성됩니다.</p>{% if current_user.role in ['admin','editor'] %}<a class="btn primary" href="{{ url_for('expiry.import_data',kind='stock') }}">ERP 재고 등록</a>{% endif %}</section>
+<div class="page-heading"><div><h1>제품 재고 현황</h1><p>제품명·규격 기준으로 현재 재고와 유효기간 위험을 확인합니다.</p></div>{% if current_user.role in ['admin','editor'] %}<a class="btn primary" href="{{ url_for('expiry.import_data',kind='stock') }}">ERP 재고 등록</a>{% endif %}</div>
+
+{% if not snapshot %}
+<section class="card empty-state"><h2>등록된 ERP 재고가 없습니다</h2><p>ERP 재고를 등록하면 대시보드가 생성됩니다.</p></section>
 {% else %}
+<p class="data-caption">재고 기준일 {{ snapshot.as_of }} · 유효기간 평가일 {{ as_of }}</p>
 
-<section class="visual-dashboard inventory-dashboard">
-  <div class="dashboard-hero blue-hero">
-    <div><h1>제품 재고 현황</h1><p>어떤 제품·규격이 어느 창고에 몇 개 있는지 한눈에 확인합니다.</p></div>
-    <div class="hero-date">기준일 {{ dashboard2.snapshot.as_of }}</div>
-  </div>
+<div class="metric-grid">
+  <article class="card"><small>총 재고</small><strong>{{ metrics.total.quantity|qty }} <em>EA</em></strong><span>제품 {{ metrics.total.products|num }}종 · LOT {{ metrics.total.lots|num }}개</span></article>
+  <article class="card available-card"><small>가용재고</small><strong>{{ availability.available.quantity|qty }} <em>EA</em></strong><span>LOT {{ availability.available.lots|num }}개</span></article>
+  <article class="card"><small>불용재고</small><strong>{{ availability.unavailable.quantity|qty }} <em>EA</em></strong><span>LOT {{ availability.unavailable.lots|num }}개</span></article>
+  <article class="card classification-card"><small>분류 필요</small><strong>{{ availability.unclassified.quantity|qty }} <em>EA</em></strong><span>LOT {{ availability.unclassified.lots|num }}개</span></article>
+</div>
 
-  <form class="visual-filter-bar" method="get">
-    <label><span>전체 품목</span><input name="q" value="{{ dashboard2.filters.q }}" placeholder="제품명 · 규격 · 품번"></label>
-    <label><span>전체 창고</span><select name="warehouse"><option value="">전체 창고</option>{% for warehouse in dashboard2.warehouses %}<option value="{{ warehouse }}" {{ 'selected' if dashboard2.filters.warehouse==warehouse }}>{{ warehouse }}</option>{% endfor %}</select></label>
-    <label><span>전체 상태</span><select name="availability"><option value="">전체 상태</option>{% for key,label in dashboard2.availability_labels.items() %}<option value="{{ key }}" {{ 'selected' if dashboard2.filters.availability==key }}>{{ label }}</option>{% endfor %}</select></label>
-    <button class="btn primary">조회</button>
-    <a class="btn" href="{{ url_for('expiry.dashboard') }}">초기화</a>
-    {% if current_user.role in ['admin','editor'] %}<a class="btn import-btn" href="{{ url_for('expiry.import_data',kind='stock') }}">ERP 재고 등록</a>{% endif %}
-  </form>
-
-  <div class="visual-kpis five">
-    <article><div class="kpi-icon">▣</div><span>총 재고</span><strong>{{ dashboard2.metrics.total_qty|qty }}</strong><small>EA</small></article>
-    <article><div class="kpi-icon">◉</div><span>가용재고</span><strong>{{ dashboard2.metrics.available_qty|qty }}</strong><small>EA</small></article>
-    <article><div class="kpi-icon">▦</div><span>불용재고</span><strong>{{ dashboard2.metrics.unavailable_qty|qty }}</strong><small>EA</small></article>
-    <article><div class="kpi-icon">◌</div><span>분류 필요</span><strong>{{ dashboard2.metrics.unclassified_qty|qty }}</strong><small>EA</small></article>
-    <article><div class="kpi-icon">◎</div><span>제품·규격 수</span><strong>{{ dashboard2.metrics.product_count|num }}</strong><small>종</small></article>
-  </div>
-
-  <div class="visual-grid two">
-    <section class="visual-card">
-      <div class="visual-card-head"><h2>재고 스냅샷 추이</h2><span>최근 등록 기준</span></div>
-      {% if dashboard2.stock_trend %}
-      <div class="mini-trend-chart">
-        {% for p in dashboard2.stock_trend %}<div class="trend-col"><b>{{ p.quantity|qty }}</b><div class="trend-bar"><i style="height:{{ p.percent }}%"></i></div><small>{{ p.label }}</small></div>{% endfor %}
-      </div>
-      {% else %}<p class="empty-inline">재고 이력이 쌓이면 추이가 표시됩니다.</p>{% endif %}
-    </section>
-    <section class="visual-card composition-card">
-      <div class="visual-card-head"><h2>현재 재고 구성</h2><span>제품·규격 기준</span></div>
-      <div class="donut-layout compact">
-        <div class="big-donut" style="background:{{ dashboard2.product_composition.gradient }}"><div><b>{{ dashboard2.product_composition.total|qty }}</b><small>EA</small></div></div>
-        <div class="legend-list">{% for item in dashboard2.product_composition.items %}<div><span><i style="background:{{ item.color }}"></i>{{ item.name }}{% if item.spec %}<small>{{ item.spec }}</small>{% endif %}</span><b>{{ item.quantity|qty }}</b><em>{{ '%.1f'|format(item.percent) }}%</em></div>{% endfor %}</div>
-      </div>
-    </section>
-  </div>
-
-  <section class="visual-card table-card main-stock-table">
-    <div class="visual-card-head"><div><h2>품목별 재고 현황</h2><span>제품명과 규격을 기준으로 창고별 현재 수량을 표시합니다.</span></div><a class="btn" href="{{ url_for('expiry.inventory_location') }}">상세 위치</a></div>
-    <div class="table-scroll"><table class="dense-table"><thead><tr><th class="sticky-left">제품명 / 규격</th><th>품번</th>{% for warehouse in dashboard2.warehouse_columns %}<th>{{ warehouse.name }}<small>{{ warehouse.label }}</small></th>{% endfor %}<th>가용</th><th>불용</th><th>분류 필요</th><th>총 재고</th></tr></thead><tbody>{% for p in dashboard2.products %}<tr><td class="sticky-left product-cell"><b>{{ p.name }}</b><small>{{ p.spec }}</small></td><td>{{ p.erp }}<small>{{ p.icube or 'ICUBE 미매핑' }}</small></td>{% for warehouse in dashboard2.warehouse_columns %}<td class="num">{% set v=p.by_warehouse.get(warehouse.name,0) %}{{ v|qty if v else '-' }}</td>{% endfor %}<td class="num good">{{ p.available|qty }}</td><td class="num bad">{{ p.unavailable|qty }}</td><td class="num warn">{{ p.unclassified|qty }}</td><td class="num total">{{ p.total|qty }}<small>{{ p.unit }}</small></td></tr>{% else %}<tr><td colspan="99" class="empty">조회 조건에 맞는 재고가 없습니다.</td></tr>{% endfor %}</tbody></table></div>
-    {% if dashboard2.product_total_count > dashboard2.products|length %}<p class="table-note">상위 {{ dashboard2.products|length }}개 제품·규격을 표시합니다. 전체 {{ dashboard2.product_total_count|num }}개입니다.</p>{% endif %}
+<div class="dashboard-grid">
+  <section class="card">
+    <div class="panel-head plain"><div><h2>유효기간 현황</h2><p>현재 양수 EA 재고 기준</p></div></div>
+    <div class="stat-list">
+      {% for b in buckets %}
+      <div><span>{{ b.label }}</span><b>{{ b.quantity|qty }} EA <small>LOT {{ b.lots|num }}</small></b></div>
+      {% endfor %}
+    </div>
   </section>
+  <section class="card">
+    <div class="panel-head plain"><div><h2>창고별 리스크</h2><p>만료·90일 이내·확인필요 재고</p></div></div>
+    <div class="stat-list">
+      {% for w in warehouse_risk %}
+      <div><span><b>{{ w.name }}</b><small>총 {{ w.total.quantity|qty }} EA</small></span><b>{{ (w.expired.quantity + w.due90.quantity + w.issues.quantity)|qty }} EA</b></div>
+      {% else %}<p class="empty-inline">표시할 창고 데이터가 없습니다.</p>{% endfor %}
+    </div>
+  </section>
+</div>
 
-  <div class="visual-grid two">
-    <section class="visual-card stagnant-card">
-      <div class="visual-card-head"><div><h2>장기 정체재고</h2><span>재고 수량이 변하지 않은 기간 기준</span></div></div>
-      <div class="stagnant-kpis"><div><span>3개월+</span><b>{{ dashboard2.stagnation_summary.m3|num }}</b></div><div><span>6개월+</span><b>{{ dashboard2.stagnation_summary.m6|num }}</b></div><div><span>12개월+</span><b>{{ dashboard2.stagnation_summary.m12|num }}</b></div></div>
-      <p class="info-note">현재는 ERP 재고 스냅샷 기준입니다. 실제 이동이력 연동 후 최초 이동일·마지막 사용일 기준으로 고도화할 수 있습니다.</p>
-    </section>
-    <section class="visual-card stagnant-list-card">
-      <div class="visual-card-head"><h2>정체재고 상세</h2><span>수탁·위탁 창고 우선</span></div>
-      <div class="mini-list">{% for r in dashboard2.stagnation[:6] %}<div><span><b>{{ r.name }}</b><small>{{ r.spec }} · {{ r.warehouse }}</small></span><strong>{{ r.quantity|qty }} {{ r.unit }}</strong><em>{{ r.stagnant_months }}개월</em></div>{% else %}<p class="empty-inline">비교 가능한 스냅샷 이력이 충분하지 않습니다.</p>{% endfor %}</div>
-    </section>
-  </div>
+<section class="card table-wrap">
+  <div class="panel-head"><div><h2>창고·장소별 제품 재고</h2><p>제품명과 규격이 먼저 보이도록 실제 보관 위치별 수량을 표시합니다.</p></div><a class="btn" href="{{ url_for('expiry.inventory_location') }}">전체 위치 보기</a></div>
+  <table>
+    <thead><tr><th>제품명 / 규격</th><th>품번</th><th>창고 / 장소</th><th>가용구분</th><th>현재 재고</th><th>LOT 수</th></tr></thead>
+    <tbody>
+      {% for r in inventory_locations %}
+      <tr>
+        <td><b>{{ r.name }}</b><small>{{ r.spec }}</small></td>
+        <td>{{ r.erp }}<small>{{ r.icube or 'ICUBE 미매핑' }}</small></td>
+        <td>{{ r.warehouse }}<small>{{ r.location }}</small></td>
+        <td><span class="availability-badge {{ r.classification }}">{{ {'available':'가용재고','unavailable':'불용재고','unclassified':'분류 필요'}[r.classification] }}</span></td>
+        <td><b>{{ r.quantity|qty }}</b> {{ r.unit }}</td>
+        <td>{{ r.lots|num }}</td>
+      </tr>
+      {% else %}<tr><td colspan="6" class="empty">표시할 재고가 없습니다.</td></tr>{% endfor %}
+    </tbody>
+  </table>
 </section>
 
-<section class="visual-dashboard expiry-dashboard">
-  <div class="dashboard-hero teal-hero">
-    <div><h1>제품 유효기간 관리 현황</h1><p>유효기간별 재고 현황을 모니터링하여 폐기 최소화와 효율적인 재고 운영을 지원합니다.</p></div>
-    <div class="hero-date">기준일 {{ dashboard2.snapshot.as_of }}</div>
-  </div>
+<div class="dashboard-grid">
+  <section class="card table-wrap">
+    <div class="panel-head plain"><div><h2>만료 재고 주요 품목</h2><p>제품·규격·창고·장소 기준</p></div></div>
+    <table class="compact-table"><thead><tr><th>제품명 / 규격</th><th>창고 / 장소</th><th>수량</th><th>LOT</th></tr></thead><tbody>
+      {% for r in expired_breakdown %}<tr><td><b>{{ r.name }}</b><small>{{ r.spec }}</small></td><td>{{ r.warehouse }}<small>{{ r.location }}</small></td><td>{{ r.quantity|qty }} EA</td><td>{{ r.lots|num }}</td></tr>
+      {% else %}<tr><td colspan="4" class="empty">만료 재고가 없습니다.</td></tr>{% endfor %}
+    </tbody></table>
+  </section>
+  <section class="card table-wrap">
+    <div class="panel-head plain"><div><h2>90일 이내 재고 주요 품목</h2><p>제품·규격·창고·장소 기준</p></div></div>
+    <table class="compact-table"><thead><tr><th>제품명 / 규격</th><th>창고 / 장소</th><th>수량</th><th>잔여일</th></tr></thead><tbody>
+      {% for r in due90_breakdown %}<tr><td><b>{{ r.name }}</b><small>{{ r.spec }}</small></td><td>{{ r.warehouse }}<small>{{ r.location }}</small></td><td>{{ r.quantity|qty }} EA</td><td>{{ r.nearest if r.nearest is not none else '-' }}</td></tr>
+      {% else %}<tr><td colspan="4" class="empty">90일 이내 재고가 없습니다.</td></tr>{% endfor %}
+    </tbody></table>
+  </section>
+</div>
 
-  <div class="visual-filter-bar expiry-filter-copy">
-    <span>현재 재고 필터가 그대로 적용됩니다.</span><strong>{{ dashboard2.filters.warehouse or '전체 창고' }}</strong><strong>{{ dashboard2.availability_labels.get(dashboard2.filters.availability,'전체 상태') }}</strong>
-  </div>
-
-  <div class="visual-kpis four expiry-kpis">
-    <article><div class="kpi-icon">▣</div><span>12개월 이내</span><strong>{{ dashboard2.expiry_cards.within365.quantity|qty }}</strong><small>EA · LOT {{ dashboard2.expiry_cards.within365.lots|num }}</small></article>
-    <article><div class="kpi-icon">▣</div><span>6개월 이내</span><strong>{{ dashboard2.expiry_cards.within180.quantity|qty }}</strong><small>EA · LOT {{ dashboard2.expiry_cards.within180.lots|num }}</small></article>
-    <article><div class="kpi-icon">▣</div><span>3개월 이내</span><strong>{{ dashboard2.expiry_cards.within90.quantity|qty }}</strong><small>EA · LOT {{ dashboard2.expiry_cards.within90.lots|num }}</small></article>
-    <article class="danger"><div class="kpi-icon">△</div><span>유효기간 만료</span><strong>{{ dashboard2.expiry_cards.expired.quantity|qty }}</strong><small>EA · LOT {{ dashboard2.expiry_cards.expired.lots|num }}</small></article>
-  </div>
-
-  <div class="visual-grid expiry-top-grid">
-    <section class="visual-card expiry-bars-card">
-      <div class="visual-card-head"><h2>품목별 유효기간 잔여수량</h2><span>제품·규격별 누적 구성</span></div>
-      <div class="expiry-legend">{% for item in dashboard2.expiry_composition %}<span><i style="background:{{ item.color }}"></i>{{ item.label }}</span>{% endfor %}</div>
-      <div class="expiry-bar-list">{% for p in dashboard2.expiry_products %}<div class="expiry-row"><span class="expiry-name"><b>{{ p.name }}</b><small>{{ p.spec }}</small></span><div class="expiry-stack">{% for seg in p.segments %}{% if seg.percent>0 %}<i title="{{ seg.label }} {{ seg.quantity|qty }} EA" style="width:{{ seg.percent }}%;background:{{ seg.color }}"></i>{% endif %}{% endfor %}</div><strong>{{ p.total|qty }}</strong></div>{% else %}<p class="empty-inline">표시할 유효기간 데이터가 없습니다.</p>{% endfor %}</div>
-    </section>
-
-    <section class="visual-card expiry-donut-card">
-      <div class="visual-card-head"><h2>전체 재고 유효기간 구성</h2><span>EA 기준</span></div>
-      <div class="donut-layout vertical">
-        <div class="big-donut" style="background:{{ dashboard2.expiry_gradient }}"><div><b>{{ dashboard2.expiry_total|qty }}</b><small>EA</small></div></div>
-        <div class="legend-list">{% for item in dashboard2.expiry_composition %}<div><span><i style="background:{{ item.color }}"></i>{{ item.label }}</span><b>{{ item.quantity|qty }}</b><em>{{ '%.1f'|format(item.percent) }}%</em></div>{% endfor %}</div>
-      </div>
-    </section>
-  </div>
-
-  <div class="visual-grid expiry-bottom-grid">
-    <section class="visual-card risk-list-card">
-      <div class="visual-card-head"><h2>품목별 유효기간 리스크</h2><span>위험도가 높은 제품 우선</span></div>
-      <div class="risk-product-list">{% for p in dashboard2.expiry_products[:6] %}<div><span><b>{{ p.name }}</b><small>{{ p.spec }}</small></span><strong>{{ p.risk|qty }} EA</strong></div>{% else %}<p class="empty-inline">유효기간 리스크 품목이 없습니다.</p>{% endfor %}</div>
-    </section>
-
-    <section class="visual-card table-card risk-lot-top">
-      <div class="visual-card-head"><div><h2>유효기간 관리 대상 LOT TOP 10</h2><span>제품·규격·LOT·창고·현재재고·잔여일</span></div><a class="btn" href="{{ url_for('expiry.index') }}">전체 LOT</a></div>
-      <div class="table-scroll"><table class="dense-table"><thead><tr><th>No.</th><th>제품명 / 규격</th><th>LOT</th><th>창고</th><th>유효기간</th><th>잔여일</th><th>현재 재고</th></tr></thead><tbody>{% for r in dashboard2.risk_lots %}<tr><td>{{ loop.index }}</td><td class="product-cell"><b>{{ r.name }}</b><small>{{ r.spec }}</small></td><td>{{ r.lot }}</td><td>{{ r.warehouse }}</td><td>{{ r.expiry or '확인 필요' }}</td><td>{% if r.remaining is not none %}<span class="days-badge {{ 'expired' if r.remaining<=0 else 'soon' if r.remaining<=90 else '' }}">{{ r.remaining }}일</span>{% else %}<span class="days-badge issue">확인</span>{% endif %}</td><td class="num">{{ r.quantity|qty }} EA</td></tr>{% else %}<tr><td colspan="7" class="empty">관리 대상 LOT가 없습니다.</td></tr>{% endfor %}</tbody></table></div>
-    </section>
-  </div>
+<section class="card table-wrap">
+  <div class="panel-head"><div><h2>우선 확인 LOT</h2><p>만료·90일 이내·계산 확인 필요 순서</p></div><a class="btn" href="{{ url_for('expiry.index') }}">유효기간 현황 전체 보기</a></div>
+  <table><thead><tr><th>상태</th><th>제품명 / 규격</th><th>LOT</th><th>창고 / 장소</th><th>현재 재고</th><th>사용기한</th><th>잔여일</th></tr></thead><tbody>
+    {% for r in priority %}
+    <tr><td>{{ r.status }}</td><td><b>{{ r.name }}</b><small>{{ r.spec or '규격 미등록' }}</small></td><td>{{ r.lot or 'LOT 없음' }}</td><td>{{ r.warehouse }}<small>{{ r.location }}</small></td><td>{{ r.quantity|qty }} {{ r.unit }}</td><td>{{ r.expiry or '확인 필요' }}</td><td>{{ r.remaining if r.remaining is not none else r.error }}</td></tr>
+    {% else %}<tr><td colspan="7" class="empty">우선 확인 대상이 없습니다.</td></tr>{% endfor %}
+  </tbody></table>
 </section>
-
 {% endif %}
 {% endblock %}
