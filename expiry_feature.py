@@ -484,7 +484,7 @@ def register_expiry(app, db, audit, roles):
         if selected_product_factory not in {"12", "3"}:
             selected_product_factory = ""
         show_value = request.args.get("show_value") == "1"
-        indexed_costs = cost_index(refs)
+        indexed_costs = cost_index(refs) if show_value else {}
 
         def stock_bucket(row):
             warehouse = warehouse_key(row.get("warehouse"))
@@ -522,10 +522,18 @@ def register_expiry(app, db, audit, roles):
             if row["product_factory"] == "3" and row["stock_bucket"] in {"finished12", "work1"}:
                 row["stock_bucket"] = "other"
                 row["location_exception"] = True
-            unit_cost, cost_month = effective_unit_cost(indexed_costs, row.get("icube"), as_of)
-            row["unit_cost"] = unit_cost
-            row["cost_month"] = cost_month
-            row["stock_value"] = number(row["quantity"]) * unit_cost if unit_cost is not None else None
+            if show_value:
+                try:
+                    unit_cost, cost_month = effective_unit_cost(indexed_costs, row.get("icube"), as_of)
+                except Exception:
+                    unit_cost, cost_month = None, None
+                row["unit_cost"] = unit_cost
+                row["cost_month"] = cost_month
+                row["stock_value"] = number(row["quantity"]) * unit_cost if unit_cost is not None else None
+            else:
+                row["unit_cost"] = None
+                row["cost_month"] = None
+                row["stock_value"] = None
             if selected_product_factory and row["product_factory"] != selected_product_factory:
                 continue
             if selected_availability and row["availability"] != selected_availability:
@@ -544,7 +552,7 @@ def register_expiry(app, db, audit, roles):
         for row in filtered:
             if row["location_exception"]:
                 location_exception_qty += number(row["quantity"])
-            if row["unit_cost"] is None and row.get("icube"):
+            if show_value and row["unit_cost"] is None and row.get("icube"):
                 missing_cost_codes.add(str(row["icube"]).strip().upper())
 
             name = row["display_name"]
@@ -744,19 +752,24 @@ def register_expiry(app, db, audit, roles):
     def product_order():
         refs = references()
         snapshot = latest_snapshot()
+        as_of = datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Seoul")).date()
+        indexed = index_mts(refs)
         products, _ = stock_scope(snapshot.payload if snapshot else [])
         names12, names3 = set(), set()
         for entry in products:
             raw = entry["data"]
-            if number(raw.get("quantity")) <= 0:
+            try:
+                if number(raw.get("quantity")) <= 0:
+                    continue
+                calc = calculate(raw, indexed, as_of, tuple(refs.get("settings", {}).get("alerts", {}).get("days", [90, 180, 365])))
+                display = product_display_lookup(calc.get("icube"), calc.get("name"), calc.get("spec"))
+                factory = dashboard_product_factory(display["name"], calc)
+                if factory == "3":
+                    names3.add(display["name"])
+                elif factory == "12":
+                    names12.add(display["name"])
+            except Exception:
                 continue
-            mapping = refs.get("mapping", {}).get(raw.get("erp"), {})
-            display = product_display_lookup(mapping.get("icube"), raw.get("name"), raw.get("spec"))
-            factory = dashboard_product_factory(display["name"], raw)
-            if factory == "3":
-                names3.add(display["name"])
-            elif factory == "12":
-                names12.add(display["name"])
 
         def ordered_names(names, factory):
             saved = dashboard_product_order(refs, factory)
@@ -1287,160 +1300,4 @@ def register_expiry(app, db, audit, roles):
             ("all_ea", "전체 양수 EA 재고"), ("negative", "음수재고"),
             ("non_ea", "EA 외·단위 미확인 재고"),
         ]).get(selected_bucket)
-        return render_template("expiry.html", rows=rows[(page-1)*100:page*100], total=len(rows), page=page, pages=pages,
-                               previous_url=url_for("expiry.index", **args, page=page-1), next_url=url_for("expiry.index", **args, page=page+1),
-                               export_url=url_for("expiry.export", **args), history=history, snapshot=snapshot,
-                               as_of=as_of, summary=summary, warehouses=warehouses, statuses=statuses,
-                               inventory_buckets=inventory_buckets(active), inventory_total=inventory_stat(active),
-                               quality=data_quality_stats(active),
-                               selected_bucket=selected_bucket, selected_bucket_label=selected_bucket_label,
-                               ref_counts={k: len(v) for k, v in refs.items()}, formats=FORMATS)
-
-    @bp.route("/import/<kind>", methods=["GET", "POST"])
-    @roles("admin", "editor")
-    def import_data(kind):
-        if kind not in FORMATS:
-            abort(404)
-        if request.method == "POST":
-            try:
-                entries, notes = parse_paste(kind, request.form.get("data", ""))
-                as_of = iso_date(request.form.get("as_of")) if kind == "stock" else None
-                refs = references()
-                old = refs.get(kind, {})
-                notes.update({"신규": sum(e["key"] not in old for e in entries),
-                              "변경": sum(e["key"] in old and old[e["key"]] != e["data"] for e in entries),
-                              "동일": sum(old.get(e["key"]) == e["data"] for e in entries)})
-                if kind == "rules":
-                    merged = {**old, **{e["key"]: e["data"] for e in entries}}
-                    for rule in merged.values():
-                        if rule["factory"] == "1·2" and rule["prefix"] + "|*" in merged:
-                            raise InputError(f"{rule['prefix']}: 1·2공장과 3공장 규칙이 충돌합니다.")
-                pending = Import(kind=kind, payload=entries, notes=notes, as_of=as_of,
-                                 base_revision=revision(refs), created_by=current_user.id)
-                db.session.add(pending)
-                db.session.commit()
-                return redirect(url_for("expiry.preview", import_id=pending.id))
-            except InputError as exc:
-                flash(str(exc), "error")
-        return render_template("expiry_import.html", kind=kind, title=FORMATS[kind][0], header=FORMATS[kind][1], formats=FORMATS)
-
-    @bp.get("/preview/<import_id>")
-    @roles("admin", "editor")
-    def preview(import_id):
-        pending = db.get_or_404(Import, import_id)
-        if pending.created_by != current_user.id:
-            abort(403)
-        if pending.kind == "family_rules":
-            return redirect(url_for("expiry.special_rule_preview", import_id=pending.id))
-        refs = references()
-        entries, scope = stock_scope(pending.payload) if pending.kind == "stock" else (pending.payload, {})
-        changes = [{"key": e["key"], "before": refs.get(pending.kind, {}).get(e["key"]), "after": e["data"]} for e in entries]
-        indexed = index_mts(refs)
-        examples = [calculate(e["data"], indexed, pending.as_of) for e in entries] if pending.kind == "stock" else []
-        page = max(1, request.args.get('page', 1, type=int))
-        pages = max(1, (len(changes)+99)//100)
-        page = min(page, pages)
-        return render_template("expiry_preview.html", pending=pending, title=FORMATS[pending.kind][0], changes=changes[(page-1)*100:page*100], page=page, pages=pages,
-                               total=len(changes), summary=summarize(examples), scope=scope, examples=examples[:30],
-                               quantity=str(sum((number(e["data"]["quantity"]) for e in pending.payload), number(0))) if pending.kind == "stock" else None)
-
-    @bp.post("/commit/<import_id>")
-    @roles("admin", "editor")
-    def commit(import_id):
-        lock_writes()
-        pending = db.session.scalar(select(Import).where(Import.id == import_id).with_for_update())
-        if not pending:
-            abort(404)
-        if pending.created_by != current_user.id:
-            abort(403)
-        if pending.committed_at:
-            flash("이미 등록된 자료입니다. 중복 등록하지 않았습니다.", "success")
-            return redirect(url_for("expiry.special_rules" if pending.kind == "family_rules" else "expiry.index"))
-        if pending.base_revision != revision(references()):
-            if pending.kind == "family_rules":
-                flash("미리보기 이후 기준정보가 변경되었습니다. 특이사항 관리에서 적용 영향을 다시 확인해 주세요.", "error")
-                return redirect(url_for("expiry.special_rules"))
-            flash("미리보기 이후 기준정보가 변경되었습니다. 자료를 다시 붙여넣어 확인해 주세요.", "error")
-            return redirect(url_for("expiry.import_data", kind=pending.kind))
-        if pending.kind == "family_rules":
-            snapshot = latest_snapshot()
-            if pending.notes["snapshot_id"] != (snapshot.id if snapshot else None):
-                flash("미리보기 이후 최신 재고가 바뀌었습니다. 적용 영향을 다시 확인해 주세요.", "error")
-                return redirect(url_for("expiry.special_rules"))
-        if pending.kind == "stock" and any("account" not in e["data"] for e in pending.payload):
-            flash("계정구분이 없는 이전 미리보기입니다. 계정구분 열을 포함해 재고를 다시 붙여넣어 주세요.", "error")
-            return redirect(url_for("expiry.import_data", kind="stock"))
-        now = datetime.now(timezone.utc)
-        if pending.kind != "stock":
-            existing = {r.key: r for r in db.session.scalars(select(Reference).where(Reference.kind == pending.kind))}
-            for entry in pending.payload:
-                row = existing.get(entry["key"])
-                if row is None:
-                    row = Reference(kind=pending.kind, key=entry["key"])
-                    db.session.add(row)
-                row.payload = entry["data"]
-                row.updated_by = current_user.id
-                row.updated_at = now
-        pending.committed_at = now
-        if pending.kind == "family_rules":
-            audit("expiry_special_rule_updated", target_type="expiry_import", target_id=pending.id,
-                  detail=json.dumps({"before": pending.notes["before"], "after": pending.payload[0]["data"],
-                                     "snapshot_id": pending.notes["snapshot_id"],
-                                     "date_changes": pending.notes["impact"]["date_changes"]}, ensure_ascii=False), commit=False)
-        else:
-            audit("expiry_import_committed", target_type="expiry_import", target_id=pending.id,
-                  detail=f"{pending.kind}:{len(pending.payload)}", commit=False)
-        db.session.commit()
-        if pending.kind == "family_rules":
-            flash("품번 계열 공통 규칙을 반영했습니다. 변경 이력에서 이전 기준을 확인할 수 있습니다.", "success")
-            return redirect(url_for("expiry.special_rules"))
-        flash(f"{FORMATS[pending.kind][0]} {len(pending.payload):,}건이 등록되었습니다.", "success")
-        return redirect(url_for("expiry.index", **({"snapshot": pending.id} if pending.kind == "stock" else {})))
-
-    @bp.get("/references/<kind>")
-    @login_required
-    def reference_list(kind):
-        if kind not in FORMATS or kind == "stock":
-            abort(404)
-        values = references().get(kind, {})
-        q = request.args.get("q", "").strip().casefold()
-        rows = [v for k, v in values.items() if not q or q in (k + json.dumps(v, ensure_ascii=False)).casefold()]
-        page = max(1, request.args.get("page", 1, type=int))
-        pages = max(1, (len(rows)+99)//100)
-        page = min(page, pages)
-        return render_template("expiry_references.html", kind=kind, title=FORMATS[kind][0], rows=rows[(page-1)*100:page*100],
-                               total=len(rows), page=page, pages=pages, q=q, formats=FORMATS)
-
-    @bp.route("/alerts", methods=["GET", "POST"])
-    @roles("admin", "editor")
-    def alerts():
-        if request.method == "POST":
-            try:
-                days = [int(request.form.get(f"day{i}", "")) for i in range(1, 4)]
-                if not 1 <= days[0] < days[1] < days[2] <= 3650:
-                    raise ValueError()
-                lock_writes()
-                row = db.session.scalar(select(Reference).where(Reference.kind == "settings", Reference.key == "alerts"))
-                if row is None:
-                    row = Reference(kind="settings", key="alerts")
-                    db.session.add(row)
-                row.payload = {"days": days}
-                row.updated_by = current_user.id
-                row.updated_at = datetime.now(timezone.utc)
-                audit("expiry_alerts_updated", detail=json.dumps(days), commit=False)
-                db.session.commit()
-                flash("화면 알림 기준이 변경되었습니다.", "success")
-                return redirect(url_for("expiry.index"))
-            except (ValueError, TypeError):
-                flash("알림 일수는 1~3,650일 범위에서 작은 순서로 입력해 주세요.", "error")
-        days = references().get("settings", {}).get("alerts", {}).get("days", [90, 180, 365])
-        return render_template("expiry_alerts.html", days=days)
-
-    @bp.get("/export.csv")
-    @login_required
-    def export():
-        _, _, _, _, _, _, rows = current_view()
-        columns = [("warehouse", "창고"), ("location", "장소"), ("erp", "아마란스 품번"), ("icube", "ICUBE 품번"),
-                   ("name", "품명"), ("spec", "규격"), ("account", "계정구분"), ("lot", "LOT"), ("unit", "단위"), ("quantity", "기말재고"),
-                   ("factory", "공장"), ("expiry", "사용기한"), ("remaining", "잔여일"), ("status", "상태"), ("error", "확인사항"), ("source", "계산근거")]
-        stream = io.StringIO()
+        return render_template("expiry.html", rows=rows[(page-1)*100:page*100], total=len(rows),
