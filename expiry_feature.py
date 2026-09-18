@@ -426,10 +426,49 @@ def register_expiry(app, db, audit, roles):
                 result.append((1, part))
         return result
 
-    def dashboard_product_order(refs):
+    def dashboard_product_factory(display_name, row):
+        if display_name in {"MedParkAlloD", "S1-Allo 덴탈"}:
+            return "3"
+        factory = (row.get("factory") or "").strip()
+        if factory == "3":
+            return "3"
+        if factory in {"1·2", "1,2", "1/2", "1", "2"}:
+            return "12"
+        return "unknown"
+
+    def dashboard_product_order(refs, factory_key):
         payload = refs.get("product_order", {}).get("dashboard", {})
-        order = payload.get("order", []) if isinstance(payload, dict) else []
+        if not isinstance(payload, dict):
+            return []
+        order = payload.get("factory3" if factory_key == "3" else "factory12", [])
         return [str(name) for name in order if str(name).strip()]
+
+    def cost_index(refs):
+        result = {}
+        for payload in refs.get("unit_cost", {}).values():
+            if not isinstance(payload, dict):
+                continue
+            icube = str(payload.get("icube") or "").strip().upper()
+            month = str(payload.get("month") or "").strip()
+            try:
+                cost = number(payload.get("cost"))
+            except Exception:
+                continue
+            if not icube or not re.fullmatch(r"\d{4}-\d{2}", month) or cost < 0:
+                continue
+            result.setdefault(icube, []).append((month, cost))
+        for values in result.values():
+            values.sort(key=lambda item: item[0])
+        return result
+
+    def effective_unit_cost(indexed_costs, icube, as_of):
+        code = str(icube or "").strip().upper()
+        target_month = as_of.strftime("%Y-%m")
+        candidates = [item for item in indexed_costs.get(code, []) if item[0] <= target_month]
+        if not candidates:
+            return None, None
+        month, cost = candidates[-1]
+        return cost, month
 
     def dashboard_inventory_data():
         refs, snapshot, as_of, summary, warehouses_from_view, _, rows = current_view()
@@ -444,16 +483,8 @@ def register_expiry(app, db, audit, roles):
         selected_product_factory = request.args.get("product_factory", "").strip()
         if selected_product_factory not in {"12", "3"}:
             selected_product_factory = ""
-
-        def product_factory(display_name, row):
-            if display_name in {"MedParkAlloD", "S1-Allo 덴탈"}:
-                return "3"
-            factory = (row.get("factory") or "").strip()
-            if factory == "3":
-                return "3"
-            if factory in {"1·2", "1,2", "1/2", "1", "2"}:
-                return "12"
-            return "unknown"
+        show_value = request.args.get("show_value") == "1"
+        indexed_costs = cost_index(refs)
 
         def stock_bucket(row):
             warehouse = warehouse_key(row.get("warehouse"))
@@ -485,12 +516,16 @@ def register_expiry(app, db, audit, roles):
             row["display_size"] = display["size"]
             row["display_category"] = display["category"]
             row["display_mapped"] = display["mapped"]
-            row["product_factory"] = product_factory(row["display_name"], row)
+            row["product_factory"] = dashboard_product_factory(row["display_name"], row)
             row["stock_bucket"] = stock_bucket(row)
             row["location_exception"] = False
             if row["product_factory"] == "3" and row["stock_bucket"] in {"finished12", "work1"}:
                 row["stock_bucket"] = "other"
                 row["location_exception"] = True
+            unit_cost, cost_month = effective_unit_cost(indexed_costs, row.get("icube"), as_of)
+            row["unit_cost"] = unit_cost
+            row["cost_month"] = cost_month
+            row["stock_value"] = number(row["quantity"]) * unit_cost if unit_cost is not None else None
             if selected_product_factory and row["product_factory"] != selected_product_factory:
                 continue
             if selected_availability and row["availability"] != selected_availability:
@@ -505,9 +540,13 @@ def register_expiry(app, db, audit, roles):
 
         groups = {}
         location_exception_qty = number(0)
+        missing_cost_codes = set()
         for row in filtered:
             if row["location_exception"]:
                 location_exception_qty += number(row["quantity"])
+            if row["unit_cost"] is None and row.get("icube"):
+                missing_cost_codes.add(str(row["icube"]).strip().upper())
+
             name = row["display_name"]
             product = groups.setdefault(name, {
                 "name": name,
@@ -521,21 +560,36 @@ def register_expiry(app, db, audit, roles):
                 "work1": number(0),
                 "work3": number(0),
                 "location_exception": number(0),
+                "value": number(0),
+                "available_value": number(0),
+                "other_value": number(0),
+                "unusable_value": number(0),
+                "value_incomplete": False,
                 "rows": {},
                 "mapped": True,
             })
             product["factories"].add(row["product_factory"])
             qty = number(row["quantity"])
             product["total"] += qty
+            if row["stock_value"] is None:
+                product["value_incomplete"] = True
+            else:
+                product["value"] += row["stock_value"]
             if not row["display_mapped"]:
                 product["mapped"] = False
             if row["stock_bucket"] == "unusable":
                 product["unusable"] += qty
+                if row["stock_value"] is not None:
+                    product["unusable_value"] += row["stock_value"]
             elif row["stock_bucket"] == "other":
                 product["other"] += qty
+                if row["stock_value"] is not None:
+                    product["other_value"] += row["stock_value"]
             else:
                 product["available"] += qty
                 product[row["stock_bucket"]] += qty
+                if row["stock_value"] is not None:
+                    product["available_value"] += row["stock_value"]
             if row["location_exception"]:
                 product["location_exception"] += qty
 
@@ -553,20 +607,35 @@ def register_expiry(app, db, audit, roles):
                 "work3": number(0),
                 "location_exception": number(0),
                 "total": number(0),
+                "value": number(0),
+                "available_value": number(0),
+                "other_value": number(0),
+                "unusable_value": number(0),
+                "value_incomplete": False,
             })
             line["total"] += qty
+            if row["stock_value"] is None:
+                line["value_incomplete"] = True
+            else:
+                line["value"] += row["stock_value"]
             if row["stock_bucket"] == "unusable":
                 line["unusable"] += qty
+                if row["stock_value"] is not None:
+                    line["unusable_value"] += row["stock_value"]
             elif row["stock_bucket"] == "other":
                 line["other"] += qty
+                if row["stock_value"] is not None:
+                    line["other_value"] += row["stock_value"]
             else:
                 line["available"] += qty
                 line[row["stock_bucket"]] += qty
+                if row["stock_value"] is not None:
+                    line["available_value"] += row["stock_value"]
             if row["location_exception"]:
                 line["location_exception"] += qty
 
-        saved_order = dashboard_product_order(refs)
-        order_rank = {name: index for index, name in enumerate(saved_order)}
+        order12 = {name: index for index, name in enumerate(dashboard_product_order(refs, "12"))}
+        order3 = {name: index for index, name in enumerate(dashboard_product_order(refs, "3"))}
 
         product_groups = []
         for product in groups.values():
@@ -591,31 +660,48 @@ def register_expiry(app, db, audit, roles):
                 product["factory_label"] = "공장 혼합"
             product_groups.append(product)
 
-        product_groups.sort(key=lambda group: (
-            order_rank.get(group["name"], 999999),
-            dashboard_natural_key(group["name"]),
-        ))
+        def product_sort_key(group):
+            if group["factory_key"] == "12":
+                return (0, order12.get(group["name"], 999999), dashboard_natural_key(group["name"]))
+            if group["factory_key"] == "3":
+                return (1, order3.get(group["name"], 999999), dashboard_natural_key(group["name"]))
+            return (2, 999999, dashboard_natural_key(group["name"]))
+
+        product_groups.sort(key=product_sort_key)
+        groups12 = [group for group in product_groups if group["factory_key"] == "12"]
+        groups3 = [group for group in product_groups if group["factory_key"] == "3"]
+        groups_other = [group for group in product_groups if group["factory_key"] not in {"12", "3"}]
 
         total_qty = sum((group["total"] for group in product_groups), number(0))
         available_total = sum((group["available"] for group in product_groups), number(0))
         other_total = sum((group["other"] for group in product_groups), number(0))
         unusable_total = sum((group["unusable"] for group in product_groups), number(0))
+        total_value = sum((group["value"] for group in product_groups), number(0))
+        available_value = sum((group["available_value"] for group in product_groups), number(0))
+        other_value = sum((group["other_value"] for group in product_groups), number(0))
+        unusable_value = sum((group["unusable_value"] for group in product_groups), number(0))
         master_unmapped = len({row.get("icube") or row.get("erp") for row in filtered if not row.get("display_mapped")})
 
-        product_summary = [{
-            "name": group["name"],
-            "factory_key": group["factory_key"],
-            "factory_label": group["factory_label"],
-            "available": group["available"],
-            "other": group["other"],
-            "unusable": group["unusable"],
-            "total": group["total"],
-            "finished12": group["finished12"],
-            "finished3": group["finished3"],
-            "work1": group["work1"],
-            "work3": group["work3"],
-            "location_exception": group["location_exception"],
-        } for group in product_groups]
+        def summary_row(group):
+            return {
+                "name": group["name"],
+                "factory_key": group["factory_key"],
+                "factory_label": group["factory_label"],
+                "available": group["available"],
+                "other": group["other"],
+                "unusable": group["unusable"],
+                "total": group["total"],
+                "finished12": group["finished12"],
+                "finished3": group["finished3"],
+                "work1": group["work1"],
+                "work3": group["work3"],
+                "location_exception": group["location_exception"],
+                "value": group["value"],
+                "available_value": group["available_value"],
+                "other_value": group["other_value"],
+                "unusable_value": group["unusable_value"],
+                "value_incomplete": group["value_incomplete"],
+            }
 
         return {
             "snapshot": snapshot,
@@ -626,18 +712,29 @@ def register_expiry(app, db, audit, roles):
                 "warehouses": [value for value in request.args.getlist("warehouse") if value],
                 "availability": selected_availability,
                 "product_factory": selected_product_factory,
+                "show_value": show_value,
             },
             "availability_labels": availability_labels,
             "all_warehouses": warehouses_from_view,
             "product_groups": product_groups,
-            "product_summary": product_summary,
+            "groups12": groups12,
+            "groups3": groups3,
+            "groups_other": groups_other,
+            "product_summary12": [summary_row(group) for group in groups12],
+            "product_summary3": [summary_row(group) for group in groups3],
+            "product_summary_other": [summary_row(group) for group in groups_other],
             "metrics": {
                 "total": total_qty,
                 "available": available_total,
                 "other": other_total,
                 "unusable": unusable_total,
+                "total_value": total_value,
+                "available_value": available_value,
+                "other_value": other_value,
+                "unusable_value": unusable_value,
                 "product_groups": len(product_groups),
                 "master_unmapped": master_unmapped,
+                "missing_cost": len(missing_cost_codes),
                 "location_exception": location_exception_qty,
             },
         }
@@ -648,35 +745,123 @@ def register_expiry(app, db, audit, roles):
         refs = references()
         snapshot = latest_snapshot()
         products, _ = stock_scope(snapshot.payload if snapshot else [])
-        names = set()
+        names12, names3 = set(), set()
         for entry in products:
-            row = entry["data"]
-            if number(row.get("quantity")) <= 0:
+            raw = entry["data"]
+            if number(raw.get("quantity")) <= 0:
                 continue
-            display = product_display_lookup(refs.get("mapping", {}).get(row.get("erp"), {}).get("icube"), row.get("name"), row.get("spec"))
-            names.add(display["name"])
-        saved = dashboard_product_order(refs)
-        ordered = [name for name in saved if name in names]
-        ordered.extend(sorted((name for name in names if name not in ordered), key=dashboard_natural_key))
+            mapping = refs.get("mapping", {}).get(raw.get("erp"), {})
+            display = product_display_lookup(mapping.get("icube"), raw.get("name"), raw.get("spec"))
+            factory = dashboard_product_factory(display["name"], raw)
+            if factory == "3":
+                names3.add(display["name"])
+            elif factory == "12":
+                names12.add(display["name"])
+
+        def ordered_names(names, factory):
+            saved = dashboard_product_order(refs, factory)
+            result = [name for name in saved if name in names]
+            result.extend(sorted((name for name in names if name not in result), key=dashboard_natural_key))
+            return result
+
+        ordered12 = ordered_names(names12, "12")
+        ordered3 = ordered_names(names3, "3")
 
         if request.method == "POST":
-            submitted = [name.strip() for name in request.form.getlist("product_name") if name.strip()]
-            if set(submitted) != set(ordered) or len(submitted) != len(set(submitted)):
+            submitted12 = [name.strip() for name in request.form.getlist("product_name_12") if name.strip()]
+            submitted3 = [name.strip() for name in request.form.getlist("product_name_3") if name.strip()]
+            if set(submitted12) != set(ordered12) or len(submitted12) != len(set(submitted12)):
+                abort(400)
+            if set(submitted3) != set(ordered3) or len(submitted3) != len(set(submitted3)):
                 abort(400)
             lock_writes()
             row = db.session.scalar(select(Reference).where(Reference.kind == "product_order", Reference.key == "dashboard"))
             if row is None:
                 row = Reference(kind="product_order", key="dashboard")
                 db.session.add(row)
-            row.payload = {"order": submitted}
+            row.payload = {"factory12": submitted12, "factory3": submitted3}
             row.updated_by = current_user.id
             row.updated_at = datetime.now(timezone.utc)
-            audit("product_order_updated", detail=f"{len(submitted)} products", commit=False)
+            audit("product_order_updated", detail=f"12:{len(submitted12)}, 3:{len(submitted3)}", commit=False)
             db.session.commit()
-            flash("제품 표시 순서를 저장했습니다.", "success")
+            flash("공장별 제품 표시 순서를 저장했습니다.", "success")
             return redirect(url_for("expiry.product_order"))
 
-        return render_template("product_order.html", products=ordered, snapshot=snapshot)
+        return render_template("product_order.html", products12=ordered12, products3=ordered3, snapshot=snapshot)
+
+    @bp.route("/unit-costs", methods=["GET", "POST"])
+    @roles("admin", "editor")
+    def unit_costs():
+        refs = references()
+        current_month = request.args.get("month", "").strip() or datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m")
+        if not re.fullmatch(r"\d{4}-\d{2}", current_month):
+            abort(400)
+
+        if request.method == "POST":
+            month = request.form.get("month", "").strip()
+            pasted = request.form.get("pasted", "")
+            if not re.fullmatch(r"\d{4}-\d{2}", month):
+                flash("적용월은 YYYY-MM 형식으로 입력해 주세요.", "error")
+                return redirect(url_for("expiry.unit_costs"))
+            parsed = []
+            errors = []
+            for line_no, raw_line in enumerate(pasted.splitlines(), 1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                cells = [cell.strip() for cell in re.split(r"\t|,", line)]
+                if len(cells) < 2:
+                    errors.append(f"{line_no}행: ICUBE 품번과 제조원가가 필요합니다.")
+                    continue
+                icube = cells[0].upper()
+                cost_text = cells[1].replace(",", "").replace("원", "").strip()
+                if line_no == 1 and ("품번" in icube or "ICUBE" in icube) and ("원가" in cells[1] or "COST" in cells[1].upper()):
+                    continue
+                try:
+                    cost = number(cost_text)
+                except Exception:
+                    errors.append(f"{line_no}행: 제조원가를 숫자로 입력해 주세요.")
+                    continue
+                if not icube or cost < 0:
+                    errors.append(f"{line_no}행: 품번 또는 제조원가를 확인해 주세요.")
+                    continue
+                parsed.append((icube, cost))
+            if errors:
+                flash(" / ".join(errors[:5]) + (" 외 오류가 더 있습니다." if len(errors) > 5 else ""), "error")
+                return render_template("unit_costs.html", month=month, rows=[], pasted=pasted)
+            if not parsed:
+                flash("저장할 제조원가가 없습니다.", "error")
+                return redirect(url_for("expiry.unit_costs", month=month))
+
+            lock_writes()
+            for icube, cost in parsed:
+                key = f"{month}|{icube}"
+                row = db.session.scalar(select(Reference).where(Reference.kind == "unit_cost", Reference.key == key))
+                if row is None:
+                    row = Reference(kind="unit_cost", key=key)
+                    db.session.add(row)
+                row.payload = {"month": month, "icube": icube, "cost": str(cost)}
+                row.updated_by = current_user.id
+                row.updated_at = datetime.now(timezone.utc)
+            audit("unit_costs_updated", detail=f"{month}: {len(parsed)} items", commit=False)
+            db.session.commit()
+            flash(f"{month} 제조원가 {len(parsed)}건을 저장했습니다.", "success")
+            return redirect(url_for("expiry.unit_costs", month=month))
+
+        rows = []
+        for payload in refs.get("unit_cost", {}).values():
+            if isinstance(payload, dict) and payload.get("month") == current_month:
+                rows.append({
+                    "icube": payload.get("icube"),
+                    "cost": number(payload.get("cost")),
+                })
+        rows.sort(key=lambda item: dashboard_natural_key(item["icube"]))
+        months = sorted({
+            str(payload.get("month"))
+            for payload in refs.get("unit_cost", {}).values()
+            if isinstance(payload, dict) and payload.get("month")
+        }, reverse=True)
+        return render_template("unit_costs.html", month=current_month, rows=rows, months=months, pasted="")
 
     @bp.get("/dashboard")
     @login_required
@@ -1259,20 +1444,3 @@ def register_expiry(app, db, audit, roles):
                    ("name", "품명"), ("spec", "규격"), ("account", "계정구분"), ("lot", "LOT"), ("unit", "단위"), ("quantity", "기말재고"),
                    ("factory", "공장"), ("expiry", "사용기한"), ("remaining", "잔여일"), ("status", "상태"), ("error", "확인사항"), ("source", "계산근거")]
         stream = io.StringIO()
-        writer = csv.writer(stream)
-        writer.writerow([v for k, v in columns])
-        for row in rows:
-            cells = []
-            for key, _ in columns:
-                value = "" if row.get(key) is None else str(row[key])
-                if key not in {"quantity", "remaining"} and (value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n"))):
-                    value = "'" + value
-                cells.append(value)
-            writer.writerow(cells)
-        return Response("\ufeff" + stream.getvalue(), mimetype="text/csv; charset=utf-8", headers={"Content-Disposition": "attachment; filename=inventory_expiry.csv"})
-
-    app.register_blueprint(bp)
-    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
-    app.config["MAX_FORM_MEMORY_SIZE"] = 10 * 1024 * 1024
-    app.jinja_env.filters["qty"] = lambda value: format(number(value), ",f").rstrip("0").rstrip(".") if "." in format(number(value), ",f") else format(number(value), ",f")
-    app.extensions["expiry_models"] = {"Reference": Reference, "Import": Import}
