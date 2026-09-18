@@ -13,6 +13,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import select, text
 
 from expiry_engine import FORMATS, InputError, calculate, family_rules, index_mts, iso_date, number, parse_family_rule, parse_paste, stock_scope, summarize
+from product_display_master import lookup as product_display_lookup
 
 
 def make_models(db):
@@ -423,12 +424,29 @@ def register_expiry(app, db, audit, roles):
         if selected_availability not in availability_labels:
             selected_availability = ""
 
+        q = request.args.get("q", "").strip().casefold()
         positive_ea = [row for row in rows if is_positive_ea(row)]
+        enriched = []
         for row in positive_ea:
+            row = dict(row)
             row["availability"], row["availability_source"] = warehouse_classification(row.get("warehouse"), refs)
             row["availability_label"] = availability_labels[row["availability"]]
-
-        filtered = [row for row in positive_ea if not selected_availability or row["availability"] == selected_availability]
+            display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"))
+            row["display_name"] = display["name"]
+            row["display_type"] = display["type"]
+            row["display_size"] = display["size"]
+            row["display_category"] = display["category"]
+            row["display_mapped"] = display["mapped"]
+            if q and not any(q in str(value or "").casefold() for value in (
+                row.get("erp"), row.get("icube"), row.get("name"), row.get("spec"),
+                row.get("display_name"), row.get("display_type"), row.get("display_size"),
+                row.get("display_category"), row.get("warehouse"), row.get("location")
+            )):
+                continue
+            if selected_availability and row["availability"] != selected_availability:
+                continue
+            enriched.append(row)
+        filtered = enriched
 
         warehouse_totals = {}
         for row in filtered:
@@ -463,28 +481,46 @@ def register_expiry(app, db, audit, roles):
             matrix = {}
             section_rows = [row for row in filtered if factory_group(row) == factory_key]
             for row in section_rows:
-                key = (row["erp"], row["name"], row.get("spec") or "규격 미등록")
+                key = (
+                    row["display_name"], row["display_type"], row["display_size"], row["display_category"]
+                )
                 group = matrix.setdefault(key, {
-                    "erp": row["erp"],
-                    "icube": row.get("icube"),
-                    "name": row["name"],
-                    "spec": row.get("spec") or "규격 미등록",
+                    "name": row["display_name"],
+                    "type": row["display_type"],
+                    "size": row["display_size"],
+                    "category": row["display_category"],
                     "total": number(0),
                     "available": number(0),
                     "unavailable": number(0),
                     "unclassified": number(0),
                     "by_warehouse": {},
+                    "icubes": set(),
+                    "erps": set(),
+                    "mapped": True,
                 })
                 qty = number(row["quantity"])
                 warehouse = row.get("warehouse") or "미지정"
                 group["total"] += qty
                 group[row["availability"]] += qty
                 group["by_warehouse"][warehouse] = group["by_warehouse"].get(warehouse, number(0)) + qty
-            products = list(matrix.values())
+                if row.get("icube"):
+                    group["icubes"].add(row["icube"])
+                if row.get("erp"):
+                    group["erps"].add(row["erp"])
+                if not row["display_mapped"]:
+                    group["mapped"] = False
+            products = []
+            for group in matrix.values():
+                group["icubes"] = sorted(group["icubes"], key=dashboard_natural_key)
+                group["erps"] = sorted(group["erps"], key=dashboard_natural_key)
+                group["icube_preview"] = ", ".join(group["icubes"][:3]) if group["icubes"] else "ICUBE 미매핑"
+                group["icube_more"] = max(0, len(group["icubes"]) - 3)
+                products.append(group)
             products.sort(key=lambda g: (
                 dashboard_natural_key(g["name"]),
-                dashboard_natural_key(g["spec"]),
-                dashboard_natural_key(g["erp"]),
+                dashboard_natural_key(g["type"]),
+                dashboard_natural_key(g["size"]),
+                dashboard_natural_key(g["category"]),
             ))
             sections.append({
                 "key": factory_key,
@@ -496,6 +532,7 @@ def register_expiry(app, db, audit, roles):
 
         availability = availability_stats(filtered, refs)
         total_qty = sum((number(row["quantity"]) for row in filtered), number(0))
+        master_unmapped = len({row.get("icube") or row.get("erp") for row in filtered if not row.get("display_mapped")})
         return {
             "snapshot": snapshot,
             "as_of": as_of,
@@ -514,6 +551,7 @@ def register_expiry(app, db, audit, roles):
                 "available": availability["available"]["quantity"],
                 "unavailable": availability["unavailable"]["quantity"],
                 "unclassified": availability["unclassified"]["quantity"],
+                "master_unmapped": master_unmapped,
             },
         }
 
