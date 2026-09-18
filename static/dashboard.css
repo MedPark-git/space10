@@ -186,3 +186,62 @@
   .order-list li{grid-template-columns:36px 1fr}
   .order-actions{grid-column:2;justify-content:flex-end}
 }
+
+
+/* Factory-specific ordering and inventory value */
+.order-columns{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px}
+.order-section{border:1px solid #dfe8ef;border-radius:10px;overflow:hidden;background:#fff}
+.order-section-head{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;background:#f6f9fb;border-bottom:1px solid #e5edf3}
+.order-section-head h2{margin:0;font-size:.78rem;color:#1f4b6d}
+.order-section-head span{font-size:.62rem;color:#7c8e9d}
+.order-list.sortable-order li{grid-template-columns:28px 60px 1fr;cursor:grab}
+.order-list.sortable-order li.dragging{opacity:.45;background:#eef5fa}
+.drag-handle{font-size:1rem;color:#8aa0b1;letter-spacing:-3px;cursor:grab}
+.order-position{width:54px;padding:5px 6px;border:1px solid #cdd9e2;border-radius:7px;text-align:center;font-weight:800;color:#31566f}
+
+.cost-panel{display:grid;gap:14px}
+.cost-entry-card{padding:0;overflow:hidden}
+.cost-entry-form{display:grid;gap:12px;padding:14px}
+.cost-entry-head{display:grid;grid-template-columns:180px 1fr;gap:14px;align-items:end}
+.cost-entry-head>div:first-child{display:grid;gap:5px}
+.cost-entry-head label,.cost-entry-guide b{font-size:.67rem;font-weight:800;color:#355a76}
+.cost-entry-head input{min-height:36px;border:1px solid #cbd9e3;border-radius:8px;padding:7px 9px}
+.cost-entry-guide{display:grid;gap:3px}
+.cost-entry-guide span{font-size:.68rem;color:#526f86}
+.cost-entry-guide small{font-size:.6rem;color:#8493a0}
+.cost-entry-form textarea{width:100%;border:1px solid #c9d8e3;border-radius:9px;padding:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.7rem;line-height:1.55;resize:vertical}
+.cost-entry-actions{display:flex;justify-content:space-between;gap:12px;align-items:center}
+.cost-entry-actions span{font-size:.61rem;color:#7a8d9d}
+.cost-month-picker select{min-height:32px;border:1px solid #ccd8e2;border-radius:8px;padding:5px 8px;background:#fff}
+.cost-table{min-width:520px}
+.cost-table td:first-child{text-align:left}
+.cost-table .cost-number{text-align:right;font-variant-numeric:tabular-nums;font-weight:800;color:#184d73}
+
+.value-toggle-block{min-width:120px}
+.switch-row{display:flex!important;align-items:center;gap:7px;min-height:36px;padding:7px 9px;border:1px solid #ccd9e3;border-radius:8px;background:#fff}
+.switch-row input{width:auto!important;min-height:auto!important}
+.switch-row span{font-size:.68rem;font-weight:700;color:#31566f}
+.inventory-value-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+.inventory-value-strip article{background:#fff;border:1px solid #dce7ef;border-radius:10px;padding:10px 12px}
+.inventory-value-strip span,.inventory-value-strip b{display:block}
+.inventory-value-strip span{font-size:.61rem;color:#74899a}
+.inventory-value-strip b{margin-top:4px;font-size:.85rem;color:#1c4f73}
+.inventory-value-strip article.warn{background:#fff8e8}
+.value-cell{min-width:120px;background:#f7fbfd;color:#184d73}
+.value-cell b{white-space:nowrap}
+.value-cell small{display:block;margin-top:3px;font-size:.56rem;color:#9a6a18}
+.factory-detail-section{display:grid;gap:8px}
+.factory-detail-title{display:flex;justify-content:space-between;align-items:center;padding:4px 2px}
+.factory-detail-title h2{margin:0;font-size:.9rem;color:#173f66}
+.factory-detail-title span{font-size:.62rem;color:#788b9b}
+.product-summary-card+.product-summary-card{margin-top:2px}
+
+@media(max-width:900px){
+  .order-columns{grid-template-columns:1fr}
+  .inventory-value-strip{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:620px){
+  .cost-entry-head{grid-template-columns:1fr}
+  .cost-entry-actions{align-items:stretch;flex-direction:column}
+  .inventory-value-strip{grid-template-columns:1fr}
+}
