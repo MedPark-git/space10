@@ -78,3 +78,69 @@
 .master-matrix .icube-cell small{display:block;margin-top:2px;color:#8393a1}
 .inventory-summary.five{grid-template-columns:repeat(5,minmax(0,1fr))}
 @media(max-width:900px){.inventory-summary.five{grid-template-columns:repeat(2,1fr)}}
+
+
+/* Vertical grouped inventory dashboard */
+.inventory-filterbar{display:grid;grid-template-columns:minmax(240px,1.5fr) 150px 150px minmax(210px,.8fr) auto;gap:10px;align-items:end;padding:12px;background:#fff;border:1px solid #dce7ef;border-radius:11px}
+.inventory-filterbar .filter-block{display:grid;gap:5px;min-width:0}
+.inventory-filterbar .filter-block label{font-size:.64rem;font-weight:800;color:#49667e}
+.inventory-filterbar input,.inventory-filterbar select{width:100%;min-height:36px;border:1px solid #ccd9e3;border-radius:8px;background:#fff;padding:7px 9px;font-size:.72rem;color:#294c67}
+.inventory-filterbar select[multiple]{min-height:84px;padding:4px}
+.inventory-filterbar .warehouse-multi small{font-size:.58rem;color:#81919f}
+.inventory-filterbar .filter-actions{display:flex;gap:7px;align-items:end;padding-bottom:1px}
+
+.inventory-kpi-grid{display:grid;grid-template-columns:1.05fr repeat(4,1fr);gap:10px}
+.inventory-kpi{background:#fff;border:1px solid #dce7ef;border-radius:11px;padding:13px 14px;box-shadow:0 3px 12px rgba(35,72,104,.05);min-width:0}
+.inventory-kpi span,.inventory-kpi small{display:block}
+.inventory-kpi span{font-size:.66rem;font-weight:800;color:#667d90}
+.inventory-kpi strong{display:block;margin:5px 0 4px;font-size:1.35rem;color:#173f66;letter-spacing:-.03em}
+.inventory-kpi small{font-size:.61rem;color:#7d8f9e;line-height:1.35}
+.inventory-kpi.finished{border-top:3px solid #2c8bc2}
+.inventory-kpi.work{border-top:3px solid #7f74ba}
+.inventory-kpi.unusable{border-top:3px solid #d85b62}
+.inventory-kpi.other{border-top:3px solid #d9a23c}
+.inventory-kpi.total{border-top:3px solid #1f5b86}
+
+.inventory-overview-strip{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 2px}
+.inventory-overview-strip>span{font-size:.64rem;color:#667d90;background:#f2f6f9;border-radius:999px;padding:5px 9px}
+.inventory-overview-strip>span b{color:#234f72}
+.inventory-overview-strip>span.warn{background:#fff5dd;color:#956300}
+.inventory-overview-strip .btn.compact{padding:5px 8px;font-size:.62rem;min-height:auto}
+
+.product-group-list{display:grid;gap:10px}
+.product-stock-group{background:#fff;border:1px solid #dce7ef;border-radius:11px;overflow:hidden;box-shadow:0 3px 12px rgba(35,72,104,.05)}
+.product-stock-group>summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:14px;align-items:center;padding:12px 14px;background:#f8fbfd;border-bottom:1px solid transparent}
+.product-stock-group[open]>summary{border-bottom-color:#e4edf3}
+.product-stock-group>summary::-webkit-details-marker{display:none}
+.product-stock-group>summary:before{content:"▸";font-size:.72rem;color:#698197;transition:transform .15s}
+.product-stock-group[open]>summary:before{transform:rotate(90deg)}
+.product-group-title{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.product-group-title strong{font-size:.88rem;color:#153f66;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.product-group-summary{display:flex;align-items:center;gap:12px;white-space:nowrap}
+.product-group-summary span{font-size:.62rem;color:#7a8d9d}
+.product-group-summary b{font-size:.75rem;color:#1e567e}
+.grouped-stock-table{min-width:1050px}
+.grouped-stock-table th,.grouped-stock-table td{padding:8px 7px}
+.grouped-stock-table .category-first{position:sticky;left:0;z-index:2;background:#fff;text-align:left;min-width:110px}
+.grouped-stock-table th.category-first{background:#edf5fb;z-index:3}
+.grouped-stock-table .category-pill{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:#eaf2f8;color:#285777;font-weight:800;white-space:nowrap}
+.grouped-stock-table .product-type{text-align:left;font-weight:700;color:#314f66;min-width:145px}
+.grouped-stock-table .product-size{text-align:left;font-weight:700;color:#5a6f80;white-space:nowrap;min-width:95px}
+.grouped-stock-table .stock-pos{font-variant-numeric:tabular-nums}
+.grouped-stock-table .finished12,.grouped-stock-table .finished3{background:#f4fafc}
+.grouped-stock-table .work1,.grouped-stock-table .work3{background:#f8f6fc}
+.grouped-stock-table .other{background:#fffaf0}
+.grouped-stock-table .unusable{background:#fff5f5;color:#c3474f}
+.grouped-stock-table .total-cell{background:#edf4fa;color:#123f67}
+@media(max-width:1150px){
+  .inventory-filterbar{grid-template-columns:1fr 1fr 1fr}
+  .inventory-filterbar .grow,.inventory-filterbar .warehouse-multi{grid-column:span 2}
+  .inventory-kpi-grid{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:700px){
+  .inventory-filterbar{grid-template-columns:1fr}
+  .inventory-filterbar .grow,.inventory-filterbar .warehouse-multi{grid-column:auto}
+  .inventory-kpi-grid{grid-template-columns:1fr}
+  .product-stock-group>summary{align-items:flex-start}
+  .product-group-summary{flex-direction:column;gap:2px;align-items:flex-end}
+}
