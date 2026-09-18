@@ -17,10 +17,10 @@
 
     <form class="v2-filters" method="get">
       <input name="q" value="{{ dashboard.filters.q }}" placeholder="전체 품목 · 제품명 / 규격 / 품번">
-      <select name="warehouse"><option value="">전체 창고</option>{% for w in dashboard.all_warehouses %}<option value="{{ w }}" {{ 'selected' if dashboard.filters.warehouse==w }}>{{ w }}</option>{% endfor %}</select>
-      <select name="availability"><option value="">전체 상태</option>{% for k,v in dashboard.availability_labels.items() %}<option value="{{ k }}" {{ 'selected' if dashboard.filters.availability==k }}>{{ v }}</option>{% endfor %}</select>
+      <select name="warehouse"><option value="">전체 창고<[REDACTED]>{% for w in dashboard.all_warehouses %}<option value="{{ w }}" {{ 'selected' if dashboard.filters.warehouse==w }}>{{ w }}<[REDACTED]>{% endfor %}</select>
+      <select name="availability"><option value="">전체 상태<[REDACTED]>{% for k,v in dashboard.availability_labels.items() %}<option value="{{ k }}" {{ 'selected' if dashboard.filters.availability==k }}>{{ v }}<[REDACTED]>{% endfor %}</select>
       <button class="btn primary">조회</button>
-      <a class="btn" href="{{ url_for('dashboard_v2') }}">초기화</a>
+      <a class="btn" href="{{ url_for('expiry.dashboard_v2') }}">초기화</a>
     </form>
 
     <div class="v2-kpis five">
