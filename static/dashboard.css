@@ -62,3 +62,19 @@
 .stock-matrix .warehouse-cell.unavailable{background:#fff8f8}
 .stock-matrix .total-cell{background:#f3f7fb;color:#133f69}
 @media(max-width:900px){.inventory-summary{grid-template-columns:repeat(2,1fr)}}
+
+
+/* Product master inventory matrix */
+.master-matrix{min-width:1280px}
+.master-matrix .sticky-product{position:sticky;left:0;z-index:4;background:#fff;min-width:150px;text-align:left}
+.master-matrix th.sticky-product{background:#edf5fb;z-index:5}
+.master-matrix .sticky-type{position:sticky;left:150px;z-index:3;background:#fff;min-width:150px;text-align:left}
+.master-matrix th.sticky-type{background:#edf5fb;z-index:4}
+.master-matrix .product-type{font-weight:700;color:#36566f}
+.master-matrix .product-size{font-weight:700;color:#4c6274;white-space:nowrap}
+.master-matrix .category-pill{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;background:#eef4f8;color:#345a78;font-weight:700;white-space:nowrap}
+.master-matrix .icube-cell{min-width:170px;text-align:left;line-height:1.35}
+.master-matrix .icube-cell span{display:block;color:#335570}
+.master-matrix .icube-cell small{display:block;margin-top:2px;color:#8393a1}
+.inventory-summary.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media(max-width:900px){.inventory-summary.five{grid-template-columns:repeat(2,1fr)}}
