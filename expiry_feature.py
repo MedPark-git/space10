@@ -426,6 +426,11 @@ def register_expiry(app, db, audit, roles):
                 result.append((1, part))
         return result
 
+    def dashboard_product_order(refs):
+        payload = refs.get("product_order", {}).get("dashboard", {})
+        order = payload.get("order", []) if isinstance(payload, dict) else []
+        return [str(name) for name in order if str(name).strip()]
+
     def dashboard_inventory_data():
         refs, snapshot, as_of, summary, warehouses_from_view, _, rows = current_view()
         availability_labels = {
@@ -482,6 +487,10 @@ def register_expiry(app, db, audit, roles):
             row["display_mapped"] = display["mapped"]
             row["product_factory"] = product_factory(row["display_name"], row)
             row["stock_bucket"] = stock_bucket(row)
+            row["location_exception"] = False
+            if row["product_factory"] == "3" and row["stock_bucket"] in {"finished12", "work1"}:
+                row["stock_bucket"] = "other"
+                row["location_exception"] = True
             if selected_product_factory and row["product_factory"] != selected_product_factory:
                 continue
             if selected_availability and row["availability"] != selected_availability:
@@ -494,42 +503,70 @@ def register_expiry(app, db, audit, roles):
                 continue
             filtered.append(row)
 
-        metric_keys = ("finished12", "finished3", "work1", "work3", "other", "unusable")
-        metric_values = {key: number(0) for key in metric_keys}
-        for row in filtered:
-            metric_values[row["stock_bucket"]] += number(row["quantity"])
-
         groups = {}
+        location_exception_qty = number(0)
         for row in filtered:
+            if row["location_exception"]:
+                location_exception_qty += number(row["quantity"])
             name = row["display_name"]
             product = groups.setdefault(name, {
                 "name": name,
                 "factories": set(),
                 "total": number(0),
+                "available": number(0),
+                "other": number(0),
+                "unusable": number(0),
+                "finished12": number(0),
+                "finished3": number(0),
+                "work1": number(0),
+                "work3": number(0),
+                "location_exception": number(0),
                 "rows": {},
                 "mapped": True,
             })
             product["factories"].add(row["product_factory"])
-            product["total"] += number(row["quantity"])
+            qty = number(row["quantity"])
+            product["total"] += qty
             if not row["display_mapped"]:
                 product["mapped"] = False
+            if row["stock_bucket"] == "unusable":
+                product["unusable"] += qty
+            elif row["stock_bucket"] == "other":
+                product["other"] += qty
+            else:
+                product["available"] += qty
+                product[row["stock_bucket"]] += qty
+            if row["location_exception"]:
+                product["location_exception"] += qty
 
             row_key = (row["display_category"], row["display_type"], row["display_size"])
             line = product["rows"].setdefault(row_key, {
                 "category": row["display_category"],
                 "type": row["display_type"],
                 "size": row["display_size"],
+                "available": number(0),
+                "other": number(0),
+                "unusable": number(0),
                 "finished12": number(0),
                 "finished3": number(0),
                 "work1": number(0),
                 "work3": number(0),
-                "other": number(0),
-                "unusable": number(0),
+                "location_exception": number(0),
                 "total": number(0),
             })
-            qty = number(row["quantity"])
-            line[row["stock_bucket"]] += qty
             line["total"] += qty
+            if row["stock_bucket"] == "unusable":
+                line["unusable"] += qty
+            elif row["stock_bucket"] == "other":
+                line["other"] += qty
+            else:
+                line["available"] += qty
+                line[row["stock_bucket"]] += qty
+            if row["location_exception"]:
+                line["location_exception"] += qty
+
+        saved_order = dashboard_product_order(refs)
+        order_rank = {name: index for index, name in enumerate(saved_order)}
 
         product_groups = []
         for product in groups.values():
@@ -553,12 +590,32 @@ def register_expiry(app, db, audit, roles):
                 product["factory_key"] = "mixed"
                 product["factory_label"] = "공장 혼합"
             product_groups.append(product)
-        product_groups.sort(key=lambda group: dashboard_natural_key(group["name"]))
 
-        total_qty = sum((number(row["quantity"]) for row in filtered), number(0))
-        finished_total = metric_values["finished12"] + metric_values["finished3"]
-        work_total = metric_values["work1"] + metric_values["work3"]
+        product_groups.sort(key=lambda group: (
+            order_rank.get(group["name"], 999999),
+            dashboard_natural_key(group["name"]),
+        ))
+
+        total_qty = sum((group["total"] for group in product_groups), number(0))
+        available_total = sum((group["available"] for group in product_groups), number(0))
+        other_total = sum((group["other"] for group in product_groups), number(0))
+        unusable_total = sum((group["unusable"] for group in product_groups), number(0))
         master_unmapped = len({row.get("icube") or row.get("erp") for row in filtered if not row.get("display_mapped")})
+
+        product_summary = [{
+            "name": group["name"],
+            "factory_key": group["factory_key"],
+            "factory_label": group["factory_label"],
+            "available": group["available"],
+            "other": group["other"],
+            "unusable": group["unusable"],
+            "total": group["total"],
+            "finished12": group["finished12"],
+            "finished3": group["finished3"],
+            "work1": group["work1"],
+            "work3": group["work3"],
+            "location_exception": group["location_exception"],
+        } for group in product_groups]
 
         return {
             "snapshot": snapshot,
@@ -573,20 +630,53 @@ def register_expiry(app, db, audit, roles):
             "availability_labels": availability_labels,
             "all_warehouses": warehouses_from_view,
             "product_groups": product_groups,
+            "product_summary": product_summary,
             "metrics": {
                 "total": total_qty,
-                "finished": finished_total,
-                "finished12": metric_values["finished12"],
-                "finished3": metric_values["finished3"],
-                "work": work_total,
-                "work1": metric_values["work1"],
-                "work3": metric_values["work3"],
-                "unusable": metric_values["unusable"],
-                "other": metric_values["other"],
+                "available": available_total,
+                "other": other_total,
+                "unusable": unusable_total,
                 "product_groups": len(product_groups),
                 "master_unmapped": master_unmapped,
+                "location_exception": location_exception_qty,
             },
         }
+
+    @bp.route("/product-order", methods=["GET", "POST"])
+    @roles("admin", "editor")
+    def product_order():
+        refs = references()
+        snapshot = latest_snapshot()
+        products, _ = stock_scope(snapshot.payload if snapshot else [])
+        names = set()
+        for entry in products:
+            row = entry["data"]
+            if number(row.get("quantity")) <= 0:
+                continue
+            display = product_display_lookup(refs.get("mapping", {}).get(row.get("erp"), {}).get("icube"), row.get("name"), row.get("spec"))
+            names.add(display["name"])
+        saved = dashboard_product_order(refs)
+        ordered = [name for name in saved if name in names]
+        ordered.extend(sorted((name for name in names if name not in ordered), key=dashboard_natural_key))
+
+        if request.method == "POST":
+            submitted = [name.strip() for name in request.form.getlist("product_name") if name.strip()]
+            if set(submitted) != set(ordered) or len(submitted) != len(set(submitted)):
+                abort(400)
+            lock_writes()
+            row = db.session.scalar(select(Reference).where(Reference.kind == "product_order", Reference.key == "dashboard"))
+            if row is None:
+                row = Reference(kind="product_order", key="dashboard")
+                db.session.add(row)
+            row.payload = {"order": submitted}
+            row.updated_by = current_user.id
+            row.updated_at = datetime.now(timezone.utc)
+            audit("product_order_updated", detail=f"{len(submitted)} products", commit=False)
+            db.session.commit()
+            flash("제품 표시 순서를 저장했습니다.", "success")
+            return redirect(url_for("expiry.product_order"))
+
+        return render_template("product_order.html", products=ordered, snapshot=snapshot)
 
     @bp.get("/dashboard")
     @login_required
