@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+{% block page_title %}ICUBE 제조원가 관리{% endblock %}
+{% block breadcrumb %}월별 제조원가 등록{% endblock %}
+{% block content %}
+<section class="ref-panel cost-panel">
+  <header class="ref-hero blue">
+    <div>
+      <h1>ICUBE 품번별 제조원가</h1>
+      <p>월별 원가를 붙여넣어 저장하면 대시보드 재고금액 계산에 자동 반영됩니다.</p>
+    </div>
+    <b>적용월 {{ month }}</b>
+  </header>
+
+  <section class="ref-card cost-entry-card">
+    <form method="post" class="cost-entry-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="cost-entry-head">
+        <div>
+          <label for="cost-month">적용월</label>
+          <input id="cost-month" name="month" type="month" value="{{ month }}" required>
+        </div>
+        <div class="cost-entry-guide">
+          <b>붙여넣기 형식</b>
+          <span>ICUBE 품번 ↹ 제조원가(원/EA)</span>
+          <small>엑셀 2개 열을 그대로 복사해 붙여넣을 수 있습니다.</small>
+        </div>
+      </div>
+      <textarea name="pasted" rows="14" spellcheck="false" placeholder="예시&#10;14BC025-01&#9;12500&#10;34AS025-01&#9;9800">{{ pasted }}</textarea>
+      <div class="cost-entry-actions">
+        <span>같은 적용월·품번을 다시 저장하면 해당 월 원가만 갱신됩니다. 다른 월 이력은 유지됩니다.</span>
+        <button class="btn primary">제조원가 저장</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="ref-card">
+    <div class="ref-card-title">
+      <div>
+        <h2>{{ month }} 저장 원가</h2>
+        <span>{{ rows|length|num }}개 품번</span>
+      </div>
+      {% if months %}
+      <form method="get" class="cost-month-picker">
+        <select name="month" onchange="this.form.submit()">
+          {% if month not in months %}<option value="{{ month }}">{{ month }}</option>{% endif %}
+          {% for m in months %}
+          <option value="{{ m }}" {{ 'selected' if m==month }}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
+    </div>
+    <div class="table-scroll">
+      <table class="ref-table cost-table">
+        <thead><tr><th>ICUBE 품번</th><th>제조원가</th><th>단위</th></tr></thead>
+        <tbody>
+          {% for row in rows %}
+          <tr><td><b>{{ row.icube }}</b></td><td class="cost-number">{{ '{:,.0f}'.format(row.cost) }}</td><td>원 / EA</td></tr>
+          {% else %}
+          <tr><td colspan="3">해당 월에 저장된 제조원가가 없습니다.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+{% endblock %}
