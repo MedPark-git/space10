@@ -1,86 +1,153 @@
 {% extends 'base.html' %}
 {% block page_title %}제품 재고 대시보드{% endblock %}
-{% block breadcrumb %}1·2공장 / 3공장 제품 재고{% endblock %}
+{% block breadcrumb %}제품 재고 현황{% endblock %}
 {% block content %}
 {% if not dashboard or not dashboard.snapshot %}
 <section class="card empty-state"><h2>등록된 ERP 재고가 없습니다</h2><p>ERP 재고를 등록하면 제품 재고 대시보드가 생성됩니다.</p></section>
 {% else %}
 <div class="ref-panel inventory-only">
   <header class="ref-hero blue">
-    <div><h1>제품 재고 현황</h1><p>제품명 · 타입 · 사이즈 · 분류 기준으로 공장별 재고를 확인합니다.</p></div>
+    <div>
+      <h1>제품 재고 현황</h1>
+      <p>분류를 먼저 보고, 제품별로 완제품·공정중·불용 재고를 한 흐름에서 확인합니다.</p>
+    </div>
     <b>기준일 {{ dashboard.snapshot.as_of }}</b>
   </header>
 
-  <form class="ref-filters" method="get">
-    <input name="q" value="{{ dashboard.filters.q }}" placeholder="제품명 · 타입 · 사이즈 · 분류 · ICUBE 품번 검색">
-    <select name="warehouse"><option value="">전체 창고</option>{% for w in dashboard.all_warehouses %}<option value="{{ w }}" {{ 'selected' if dashboard.filters.warehouse==w }}>{{ w }}</option>{% endfor %}</select>
-    <select name="availability"><option value="">전체 상태</option>{% for k,v in dashboard.availability_labels.items() %}<option value="{{ k }}" {{ 'selected' if dashboard.filters.availability==k }}>{{ v }}</option>{% endfor %}</select>
-    <button class="btn primary">조회</button>
-    <a class="btn" href="{{ url_for('expiry.dashboard') }}">초기화</a>
+  <form class="inventory-filterbar" method="get">
+    <div class="filter-block grow">
+      <label>검색</label>
+      <input name="q" value="{{ dashboard.filters.q }}" placeholder="제품명 · 타입 · 사이즈 · 분류 검색">
+    </div>
+    <div class="filter-block">
+      <label>제품 공장</label>
+      <select name="product_factory">
+        <option value="">전체</option>
+        <option value="12" {{ 'selected' if dashboard.filters.product_factory=='12' }}>1·2공장</option>
+        <option value="3" {{ 'selected' if dashboard.filters.product_factory=='3' }}>3공장</option>
+      </select>
+    </div>
+    <div class="filter-block">
+      <label>재고 상태</label>
+      <select name="availability">
+        <option value="">전체</option>
+        {% for k,v in dashboard.availability_labels.items() %}
+        <option value="{{ k }}" {{ 'selected' if dashboard.filters.availability==k }}>{{ v }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="filter-block warehouse-multi">
+      <label>창고 복수 선택</label>
+      <select name="warehouse" multiple size="4">
+        {% for w in dashboard.all_warehouses %}
+        <option value="{{ w }}" {{ 'selected' if w in dashboard.filters.warehouses }}>{{ w }}</option>
+        {% endfor %}
+      </select>
+      <small>Ctrl/⌘로 여러 창고 선택</small>
+    </div>
+    <div class="filter-actions">
+      <button class="btn primary">조회</button>
+      <a class="btn" href="{{ url_for('expiry.dashboard') }}">초기화</a>
+    </div>
   </form>
 
-  <div class="ref-kpis five inventory-summary">
-    <article><span>총 재고</span><strong>{{ dashboard.metrics.total|qty }}</strong><small>EA</small></article>
-    <article><span>가용재고</span><strong>{{ dashboard.metrics.available|qty }}</strong><small>EA</small></article>
-    <article><span>불용재고</span><strong>{{ dashboard.metrics.unavailable|qty }}</strong><small>EA</small></article>
-    <article><span>분류 필요</span><strong>{{ dashboard.metrics.unclassified|qty }}</strong><small>EA</small></article>
-    <article class="{{ 'danger' if dashboard.metrics.master_unmapped else '' }}"><span>마스터 미등록</span><strong>{{ dashboard.metrics.master_unmapped|num }}</strong><small>품번</small></article>
+  <section class="inventory-kpi-grid">
+    <article class="inventory-kpi total">
+      <span>총재고</span>
+      <strong>{{ dashboard.metrics.total|qty }}</strong>
+      <small>전체 제품 재고 · EA</small>
+    </article>
+    <article class="inventory-kpi finished">
+      <span>완제품</span>
+      <strong>{{ dashboard.metrics.finished|qty }}</strong>
+      <small>1·2공장 {{ dashboard.metrics.finished12|qty }} · 3공장 {{ dashboard.metrics.finished3|qty }}</small>
+    </article>
+    <article class="inventory-kpi work">
+      <span>공정중</span>
+      <strong>{{ dashboard.metrics.work|qty }}</strong>
+      <small>1공장 {{ dashboard.metrics.work1|qty }} · 3공장 {{ dashboard.metrics.work3|qty }}</small>
+    </article>
+    <article class="inventory-kpi unusable">
+      <span>불용/부적합</span>
+      <strong>{{ dashboard.metrics.unusable|qty }}</strong>
+      <small>출고 제외 재고</small>
+    </article>
+    <article class="inventory-kpi other">
+      <span>기타/미분류 위치</span>
+      <strong>{{ dashboard.metrics.other|qty }}</strong>
+      <small>창고·장소 기준 추가 분류 필요</small>
+    </article>
+  </section>
+
+  <div class="inventory-overview-strip">
+    <span><b>{{ dashboard.metrics.product_groups|num }}</b> 제품군</span>
+    <span class="{{ 'warn' if dashboard.metrics.master_unmapped else '' }}"><b>{{ dashboard.metrics.master_unmapped|num }}</b> 마스터 미등록 품번</span>
+    <button type="button" class="btn compact" id="expand-all-groups">전체 펼치기</button>
+    <button type="button" class="btn compact" id="collapse-all-groups">전체 접기</button>
   </div>
 
-  {% for section in dashboard.factory_sections %}
-    {% if section.key != 'unknown' or section.products %}
-    <section class="ref-card factory-stock-section">
-      <div class="factory-section-head">
-        <div>
-          <h2>{{ section.label }}</h2>
-          <p>표시 그룹 {{ section.count|num }}개 · 현재 재고 {{ section.quantity|qty }} EA</p>
+  <div class="product-group-list">
+    {% for group in dashboard.product_groups %}
+    <details class="product-stock-group" open>
+      <summary>
+        <div class="product-group-title">
+          <strong>{{ group.name }}</strong>
+          <span class="factory-badge {{ 'factory3' if group.factory_key=='3' else 'factory12' if group.factory_key=='12' else 'unknown' }}">{{ group.factory_label }}</span>
         </div>
-        {% if section.key == '12' %}<span class="factory-badge factory12">1·2공장</span>{% elif section.key == '3' %}<span class="factory-badge factory3">3공장</span>{% else %}<span class="factory-badge unknown">미분류</span>{% endif %}
-      </div>
+        <div class="product-group-summary">
+          <span>{{ group.rows|length|num }}개 구분</span>
+          <b>{{ group.total|qty }} EA</b>
+        </div>
+      </summary>
       <div class="table-scroll">
-        <table class="ref-table stock-matrix master-matrix">
+        <table class="ref-table grouped-stock-table">
           <thead>
             <tr>
-              <th class="sticky-product">제품명</th>
-              <th class="sticky-type">타입</th>
+              <th class="category-first">분류</th>
+              <th>타입</th>
               <th>사이즈</th>
-              <th>분류</th>
-              <th>ICUBE 품번</th>
-              {% for w in dashboard.warehouse_meta %}
-              <th class="warehouse-head {{ w.classification }}">{{ w.name }}<small>{{ w.label }}</small></th>
-              {% endfor %}
-              <th>가용</th><th>불용</th><th>분류필요</th><th>총재고</th>
+              <th>완제품 1·2공장</th>
+              <th>완제품 3공장</th>
+              <th>공정중 1공장</th>
+              <th>공정중 3공장</th>
+              <th>기타</th>
+              <th>불용</th>
+              <th>총재고</th>
             </tr>
           </thead>
           <tbody>
-            {% for p in section.products %}
+            {% for p in group.rows %}
             <tr>
-              <td class="sticky-product product-name"><b>{{ p.name }}</b></td>
-              <td class="sticky-type product-type">{{ p.type }}</td>
+              <td class="category-first"><span class="category-pill">{{ p.category }}</span></td>
+              <td class="product-type">{{ p.type }}</td>
               <td class="product-size">{{ p.size }}</td>
-              <td><span class="category-pill">{{ p.category }}</span></td>
-              <td class="icube-cell">
-                <span>{{ p.icube_preview }}</span>
-                {% if p.icube_more %}<small>외 {{ p.icube_more|num }}개</small>{% endif %}
-              </td>
-              {% for w in dashboard.warehouse_meta %}
-              {% set stock_qty = p.by_warehouse.get(w.name,0) %}
-              <td class="warehouse-cell {{ w.classification }}">{{ stock_qty|qty if stock_qty else '-' }}</td>
-              {% endfor %}
-              <td class="good"><b>{{ p.available|qty }}</b></td>
-              <td class="bad">{{ p.unavailable|qty }}</td>
-              <td class="warn">{{ p.unclassified|qty }}</td>
+              <td class="stock-pos finished12">{{ p.finished12|qty if p.finished12 else '-' }}</td>
+              <td class="stock-pos finished3">{{ p.finished3|qty if p.finished3 else '-' }}</td>
+              <td class="stock-pos work1">{{ p.work1|qty if p.work1 else '-' }}</td>
+              <td class="stock-pos work3">{{ p.work3|qty if p.work3 else '-' }}</td>
+              <td class="stock-pos other">{{ p.other|qty if p.other else '-' }}</td>
+              <td class="stock-pos unusable">{{ p.unusable|qty if p.unusable else '-' }}</td>
               <td class="total-cell"><b>{{ p.total|qty }}</b></td>
             </tr>
-            {% else %}
-            <tr><td colspan="99">해당 공장 제품 재고가 없습니다.</td></tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    </section>
-    {% endif %}
-  {% endfor %}
+    </details>
+    {% else %}
+    <section class="card empty-state"><h2>조건에 맞는 재고가 없습니다</h2><p>필터를 변경해 다시 조회해 주세요.</p></section>
+    {% endfor %}
+  </div>
 </div>
+
+<script>
+(() => {
+  const groups = () => Array.from(document.querySelectorAll('.product-stock-group'));
+  const openAll = document.getElementById('expand-all-groups');
+  const closeAll = document.getElementById('collapse-all-groups');
+  if (openAll) openAll.addEventListener('click', () => groups().forEach(el => el.open = true));
+  if (closeAll) closeAll.addEventListener('click', () => groups().forEach(el => el.open = false));
+})();
+</script>
 {% endif %}
 {% endblock %}
