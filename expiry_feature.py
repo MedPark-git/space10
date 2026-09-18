@@ -1170,134 +1170,93 @@ def register_expiry(app, db, audit, roles):
         page = max(1, request.args.get("page", 1, type=int))
         pages = max(1, (len(filtered) + 99) // 100)
         page = min(page, pages)
-        args = request.args.to_dict(); args.pop("page", None)
-        return render_template("inventory_location.html", snapshot=snapshot, as_of=as_of, rows=filtered[(page-1)*100:page*100],
-                               total=len(filtered), page=page, pages=pages, groups=groups[:100], summary=summary,
-                               warehouses=warehouses, selected=selected, labels=labels,
-                               previous_url=url_for("expiry.inventory_location", **args, page=page-1),
-                               next_url=url_for("expiry.inventory_location", **args, page=page+1))
-
-    @bp.route("/warehouse-classes", methods=["GET", "POST"])
-    @roles("admin", "editor")
-    def warehouse_classes():
-        if request.method == "POST":
-            names = request.form.getlist("warehouse_name")
-            classifications = request.form.getlist("classification")
-            if len(names) != len(classifications):
-                abort(400)
-            lock_writes()
-            for name, classification in zip(names, classifications):
-                name = str(name or "").strip()
-                if not name or classification not in {"available", "unavailable", "unclassified"}:
-                    abort(400)
-                key = warehouse_key(name)
-                row = db.session.scalar(select(Reference).where(Reference.kind == "warehouse_classes", Reference.key == key))
-                if classification == "unclassified":
-                    if row:
-                        db.session.delete(row)
-                    continue
-                if not row:
-                    row = Reference(kind="warehouse_classes", key=key)
-                    db.session.add(row)
-                row.payload = {"name": name, "classification": classification}
-                row.updated_by = current_user.id
-                row.updated_at = datetime.now(timezone.utc)
-            audit("warehouse_classes_updated", detail=f"{len(names)} warehouses", commit=False)
-            db.session.commit()
-            flash("창고별 가용재고 분류를 저장했습니다.", "success")
-            return redirect(url_for("expiry.warehouse_classes"))
-        refs = references()
-        snapshot = latest_snapshot()
-        products, _ = stock_scope(snapshot.payload if snapshot else [])
-        names = sorted({entry["data"].get("warehouse") or "미지정" for entry in products})
-        rows = []
-        for name in names:
-            classification, source = warehouse_classification(name, refs)
-            rows.append({"name": name, "classification": classification, "source": source})
-        return render_template("warehouse_classes.html", rows=rows, snapshot=snapshot)
-
-    @bp.get("/master-data")
-    @login_required
-    def master_data():
-        refs = references()
-        kinds = [(kind, FORMATS[kind][0], len(refs.get(kind, {}))) for kind in FORMATS if kind != "stock"]
-        return render_template("expiry_master_data.html", kinds=kinds,
-                               family_rule_count=len(refs.get("family_rules", {})))
-
-    @bp.get("/stock-history")
-    @login_required
-    def stock_history():
-        imports = db.session.scalars(select(Import).where(Import.kind == "stock", Import.committed_at.is_not(None))
-                                     .order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(100)).all()
-        return render_template("expiry_stock_history.html", imports=imports, latest=latest_snapshot())
-
-    @bp.get("/analysis")
-    @login_required
-    def analysis():
-        _, snapshot, as_of, summary, _, _, rows = current_view()
-        active = active_rows(rows)
-        buckets = inventory_buckets(active)
-        quality = data_quality_stats(active)
-        warehouses = []
-        ea_rows = [row for row in active if is_positive_ea(row)]
-        for warehouse in sorted({row["warehouse"] or "미지정" for row in ea_rows}):
-            group = [row for row in ea_rows if (row["warehouse"] or "미지정") == warehouse]
-            warehouses.append({"name": warehouse, "total": inventory_stat(group),
-                               "expired": inventory_stat([row for row in group if action_bucket(row) == "만료"]),
-                               "due90": inventory_stat([row for row in group if action_bucket(row) == "1~90일"]),
-                               "due180": inventory_stat([row for row in group if action_bucket(row) == "91~180일"]),
-                               "issues": inventory_stat([row for row in group if action_bucket(row) == "확인 필요"])})
-        warehouses.sort(key=lambda row: (row["expired"]["quantity"], row["due90"]["quantity"],
-                                           row["issues"]["quantity"], row["total"]["quantity"]), reverse=True)
-        product_groups = {}
-        for row in active:
-            if not row["error"] and (row["remaining"] is None or row["remaining"] > 365):
-                continue
-            key = (row["erp"], row["name"], row.get("spec") or "규격 미등록", row["unit"])
-            group = product_groups.setdefault(key, {"erp": row["erp"], "name": row["name"],
-                                                     "spec": row.get("spec") or "규격 미등록", "unit": row["unit"],
-                                                     "lot_keys": set(), "quantity": number(0), "expired": 0,
-                                                     "due90": 0, "issues": 0, "nearest": None})
-            group["lot_keys"].add((row["erp"], row["lot"] or (row["warehouse"], row["location"])))
-            group["quantity"] += number(row["quantity"])
-            bucket = action_bucket(row)
-            group["expired"] += bucket == "만료"
-            group["due90"] += bucket == "1~90일"
-            group["issues"] += bucket == "확인 필요"
-            if row["remaining"] is not None:
-                group["nearest"] = row["remaining"] if group["nearest"] is None else min(group["nearest"], row["remaining"])
-        for group in product_groups.values():
-            group["lots"] = len(group.pop("lot_keys"))
-        products = sorted(product_groups.values(), key=lambda group: (0 if group["expired"] else 1,
-                           0 if group["due90"] else 1, 0 if group["issues"] else 1,
-                           group["nearest"] if group["nearest"] is not None else 999999,
-                           group["name"]))[:30]
-        factories = []
-        for label in sorted({(row["factory"] + "공장") if row["factory"] else "미확인" for row in ea_rows}):
-            group = [row for row in ea_rows if ((row["factory"] + "공장") if row["factory"] else "미확인") == label]
-            factories.append({"label": label, **inventory_stat(group)})
-        issues = []
-        for label in sorted({row["error"] for row in ea_rows if row["error"]}):
-            group = [row for row in ea_rows if row["error"] == label]
-            issues.append({"label": label, **inventory_stat(group)})
-        return render_template("expiry_analysis_data.html", snapshot=snapshot, as_of=as_of, summary=summary,
-                               total=len(active), buckets=buckets, warehouses=warehouses, products=products,
-                               factories=factories, issues=issues, quality=quality)
-
-    @bp.get("/")
-    @login_required
-    def index():
-        refs, snapshot, as_of, summary, warehouses, statuses, rows = current_view()
-        page = max(1, request.args.get("page", 1, type=int))
-        pages = max(1, (len(rows) + 99) // 100)
-        page = min(page, pages)
         args = request.args.to_dict()
         args.pop("page", None)
-        history = db.session.scalars(select(Import).where(Import.kind == "stock", Import.committed_at.is_not(None)).order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(100)).all()
+        history = db.session.scalars(
+            select(Import)
+            .where(Import.kind == "stock", Import.committed_at.is_not(None))
+            .order_by(Import.as_of.desc(), Import.committed_at.desc())
+            .limit(100)
+        ).all()
         active = active_rows(rows)
         selected_bucket = request.args.get("bucket", "")
         selected_bucket_label = dict(bucket_definitions + [
-            ("all_ea", "전체 양수 EA 재고"), ("negative", "음수재고"),
+            ("all_ea", "전체 양수 EA 재고"),
+            ("negative", "음수재고"),
             ("non_ea", "EA 외·단위 미확인 재고"),
         ]).get(selected_bucket)
-        return render_template("expiry.html", rows=rows[(page-1)*100:page*100], total=len(rows),
+        return render_template(
+            "expiry.html",
+            rows=rows[(page-1)*100:page*100],
+            total=len(rows),
+            page=page,
+            pages=pages,
+            summary=summary,
+            warehouses=warehouses,
+            statuses=statuses,
+            history=history,
+            active=active,
+            selected_bucket=selected_bucket,
+            selected_bucket_label=selected_bucket_label,
+            previous_url=url_for("expiry.index", **args, page=max(1, page-1)),
+            next_url=url_for("expiry.index", **args, page=min(pages, page+1)),
+        )
+
+    @bp.route("/alerts", methods=["GET", "POST"])
+    @roles("admin", "editor")
+    def alerts():
+        if request.method == "POST":
+            try:
+                days = [int(request.form.get(f"day{i}", "")) for i in range(1, 4)]
+                if not 1 <= days[0] < days[1] < days[2] <= 3650:
+                    raise ValueError()
+                lock_writes()
+                row = db.session.scalar(select(Reference).where(Reference.kind == "settings", Reference.key == "alerts"))
+                if row is None:
+                    row = Reference(kind="settings", key="alerts")
+                    db.session.add(row)
+                row.payload = {"days": days}
+                row.updated_by = current_user.id
+                row.updated_at = datetime.now(timezone.utc)
+                audit("expiry_alerts_updated", detail=json.dumps(days), commit=False)
+                db.session.commit()
+                flash("화면 알림 기준이 변경되었습니다.", "success")
+                return redirect(url_for("expiry.index"))
+            except (ValueError, TypeError):
+                flash("알림 일수는 1~3,650일 범위에서 작은 순서로 입력해 주세요.", "error")
+        days = references().get("settings", {}).get("alerts", {}).get("days", [90, 180, 365])
+        return render_template("expiry_alerts.html", days=days)
+
+    @bp.get("/export.csv")
+    @login_required
+    def export():
+        _, _, _, _, _, _, rows = current_view()
+        columns = [
+            ("warehouse", "창고"), ("location", "장소"), ("erp", "아마란스 품번"), ("icube", "ICUBE 품번"),
+            ("name", "품명"), ("spec", "규격"), ("account", "계정구분"), ("lot", "LOT"), ("unit", "단위"),
+            ("quantity", "기말재고"), ("factory", "공장"), ("expiry", "사용기한"), ("remaining", "잔여일"),
+            ("status", "상태"), ("error", "확인사항"), ("source", "계산근거"),
+        ]
+        stream = io.StringIO()
+        writer = csv.writer(stream)
+        writer.writerow([label for _, label in columns])
+        for row in rows:
+            cells = []
+            for key, _ in columns:
+                value = "" if row.get(key) is None else str(row[key])
+                if key not in {"quantity", "remaining"} and (
+                    value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n"))
+                ):
+                    value = "'" + value
+                cells.append(value)
+            writer.writerow(cells)
+        return Response(
+            "\ufeff" + stream.getvalue(),
+            mimetype="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=inventory_expiry.csv"},
+        )
+
+    app.register_blueprint(bp)
+    app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+    app.config["MAX_FORM_MEMORY_SIZE"] = 10 * 1024 * 1024
+    app.extensions["expiry_models"] = {"Reference": Reference, "Import": Import}
