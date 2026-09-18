@@ -165,6 +165,18 @@ def create_app(test_config=None):
     register_errors(app)
     from expiry_feature import register_expiry
     register_expiry(app, db, audit, roles)
+
+    original_inventory_dashboard = app.view_functions.get("expiry.dashboard")
+    fallback_inventory_dashboard = app.view_functions.get("expiry.dashboard_v2")
+    if original_inventory_dashboard and fallback_inventory_dashboard:
+        def safe_inventory_dashboard(*args, **kwargs):
+            try:
+                return original_inventory_dashboard(*args, **kwargs)
+            except Exception:
+                db.session.rollback()
+                return fallback_inventory_dashboard(*args, **kwargs)
+        app.view_functions["expiry.dashboard"] = safe_inventory_dashboard
+
     app.jinja_env.filters["kst"] = lambda value: value.astimezone(KST).strftime("%Y-%m-%d %H:%M") if value else "-"
     app.jinja_env.filters["num"] = lambda value: f"{float(value or 0):,.0f}"
     app.jinja_env.filters["qty"] = lambda value: f"{float(value or 0):,.6f}".rstrip("0").rstrip(".")
