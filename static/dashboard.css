@@ -33,3 +33,32 @@
 .ref-card .muted,.ref-panel .muted{font-size:.67rem;color:#75889a;line-height:1.5}
 @media(max-width:1450px){.refdash{grid-template-columns:1fr}}
 @media(max-width:900px){.ref-kpis.five,.ref-kpis.four{grid-template-columns:repeat(2,1fr)}.ref-grid.two,.ref-grid.expiry-top{grid-template-columns:1fr}.ref-filters{grid-template-columns:1fr}.ref-donut-layout{grid-template-columns:1fr;justify-items:center}}
+
+
+/* Factory-separated inventory dashboard */
+.inventory-only,.expiry-only{display:grid;gap:14px}
+.inventory-summary{grid-template-columns:repeat(4,minmax(0,1fr))}
+.factory-stock-section{padding:0;overflow:hidden}
+.factory-section-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #e3ebf1;background:#f9fbfd}
+.factory-section-head h2{margin:0;font-size:1rem;color:#153f66}
+.factory-section-head p{margin:4px 0 0;font-size:.68rem;color:#74889a}
+.factory-badge{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:.68rem;font-weight:800}
+.factory-badge.factory12{background:#e8f3ff;color:#17689a}
+.factory-badge.factory3{background:#e8faf6;color:#0b7f75}
+.factory-badge.unknown{background:#f1f3f5;color:#65727d}
+.stock-matrix{min-width:1050px}
+.stock-matrix .sticky-product{position:sticky;left:0;z-index:3;background:#fff;min-width:150px;text-align:left}
+.stock-matrix th.sticky-product{background:#edf5fb;z-index:4}
+.stock-matrix .sticky-spec{position:sticky;left:150px;z-index:2;background:#fff;min-width:130px;text-align:left}
+.stock-matrix th.sticky-spec{background:#edf5fb;z-index:3}
+.stock-matrix .product-name b{font-size:.7rem;color:#173e63}
+.stock-matrix .product-spec{font-weight:700;color:#455f75}
+.stock-matrix .warehouse-head small{display:block;margin-top:2px;font-size:.55rem;font-weight:600;color:#7f91a1}
+.stock-matrix .warehouse-head.available{background:#eaf8f4}
+.stock-matrix .warehouse-head.unclassified{background:#fff8e8}
+.stock-matrix .warehouse-head.unavailable{background:#fff0f0}
+.stock-matrix .warehouse-cell.available{background:#f4fbf8}
+.stock-matrix .warehouse-cell.unclassified{background:#fffdf7}
+.stock-matrix .warehouse-cell.unavailable{background:#fff8f8}
+.stock-matrix .total-cell{background:#f3f7fb;color:#133f69}
+@media(max-width:900px){.inventory-summary{grid-template-columns:repeat(2,1fr)}}
