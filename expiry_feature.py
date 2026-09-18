@@ -440,6 +440,176 @@ def register_expiry(app, db, audit, roles):
                                due90_breakdown=due90_breakdown, inventory_locations=inventory_locations,
                                ref_counts={kind: len(refs.get(kind, {})) for kind in FORMATS if kind != "stock"})
 
+
+    @bp.get("/dashboard-v2")
+    @login_required
+    def dashboard_v2():
+        refs, snapshot, as_of, summary, warehouses, _, rows = current_view()
+        positive_ea = [row for row in rows if is_positive_ea(row)]
+
+        availability_labels = {"available": "가용재고", "unavailable": "불용재고", "unclassified": "분류 필요"}
+        selected_availability = request.args.get("availability", "").strip()
+        if selected_availability not in availability_labels:
+            selected_availability = ""
+
+        for row in positive_ea:
+            row["availability"], row["availability_source"] = warehouse_classification(row.get("warehouse"), refs)
+            row["availability_label"] = availability_labels[row["availability"]]
+
+        filtered = [row for row in positive_ea if not selected_availability or row["availability"] == selected_availability]
+
+        product_groups = inventory_product_groups(filtered, refs)
+        warehouse_names = sorted({row.get("warehouse") or "미지정" for row in filtered})
+        matrix = {}
+        for row in filtered:
+            key = (row["erp"], row["name"], row.get("spec") or "규격 미등록")
+            group = matrix.setdefault(key, {
+                "erp": row["erp"], "icube": row.get("icube"), "name": row["name"],
+                "spec": row.get("spec") or "규격 미등록",
+                "total": number(0), "available": number(0), "unavailable": number(0),
+                "unclassified": number(0), "by_warehouse": {}
+            })
+            qty = number(row["quantity"])
+            warehouse = row.get("warehouse") or "미지정"
+            group["total"] += qty
+            group[row["availability"]] += qty
+            group["by_warehouse"][warehouse] = group["by_warehouse"].get(warehouse, number(0)) + qty
+        products = sorted(matrix.values(), key=lambda g: (g["total"], g["name"]), reverse=True)
+
+        total_qty = sum((number(row["quantity"]) for row in filtered), number(0))
+        availability = availability_stats(filtered, refs)
+
+        colors = {
+            "365일 초과": "#17689a",
+            "181~365일": "#62bdd6",
+            "91~180일": "#62cdb4",
+            "1~90일": "#f2c85c",
+            "만료": "#ef7777",
+            "확인 필요": "#9b8ac4",
+        }
+        expiry_order = ["365일 초과", "181~365일", "91~180일", "1~90일", "만료", "확인 필요"]
+        expiry_totals = {label: number(0) for label in expiry_order}
+        expiry_product_map = {}
+        for row in filtered:
+            label = action_bucket(row)
+            expiry_totals[label] += number(row["quantity"])
+            key = (row["erp"], row["name"], row.get("spec") or "규격 미등록")
+            group = expiry_product_map.setdefault(key, {
+                "erp": row["erp"], "name": row["name"], "spec": row.get("spec") or "규격 미등록",
+                "total": number(0), "bands": {band: number(0) for band in expiry_order}
+            })
+            qty = number(row["quantity"])
+            group["total"] += qty
+            group["bands"][label] += qty
+
+        expiry_products = []
+        for group in expiry_product_map.values():
+            group["segments"] = [{
+                "label": band, "color": colors[band], "quantity": group["bands"][band],
+                "percent": float(group["bands"][band] * 100 / group["total"]) if group["total"] else 0
+            } for band in expiry_order]
+            group["risk"] = group["bands"]["만료"] + group["bands"]["1~90일"] + group["bands"]["91~180일"] + group["bands"]["181~365일"] + group["bands"]["확인 필요"]
+            expiry_products.append(group)
+        expiry_products.sort(key=lambda g: (g["risk"], g["total"], g["name"]), reverse=True)
+
+        expiry_total = sum(expiry_totals.values(), number(0))
+        expiry_composition = []
+        gradient = []
+        cursor = 0.0
+        for band in expiry_order:
+            qty = expiry_totals[band]
+            percent = float(qty * 100 / expiry_total) if expiry_total else 0.0
+            start = cursor
+            cursor += percent
+            expiry_composition.append({"label": band, "color": colors[band], "quantity": qty, "percent": percent})
+            if percent > 0:
+                gradient.append(f"{colors[band]} {start:.3f}% {cursor:.3f}%")
+        expiry_gradient = "conic-gradient(" + ",".join(gradient) + ")" if gradient else "#e8eef3"
+
+        top_products = products[:4]
+        comp_colors = ["#17689a", "#3f9fd0", "#65c3d0", "#91d2c6", "#f0aaa6"]
+        comp_total = sum((g["total"] for g in products), number(0))
+        product_composition = []
+        used = number(0)
+        for idx, group in enumerate(top_products):
+            used += group["total"]
+            product_composition.append({
+                "name": group["name"], "spec": group["spec"], "quantity": group["total"],
+                "percent": float(group["total"] * 100 / comp_total) if comp_total else 0,
+                "color": comp_colors[idx]
+            })
+        if comp_total - used > 0:
+            product_composition.append({
+                "name": "기타", "spec": "", "quantity": comp_total - used,
+                "percent": float((comp_total-used) * 100 / comp_total) if comp_total else 0,
+                "color": comp_colors[4]
+            })
+        comp_gradient = []
+        cursor = 0.0
+        for item in product_composition:
+            start = cursor
+            cursor += item["percent"]
+            comp_gradient.append(f"{item['color']} {start:.3f}% {cursor:.3f}%")
+        product_gradient = "conic-gradient(" + ",".join(comp_gradient) + ")" if comp_gradient else "#e8eef3"
+
+        priority = sorted(
+            (row for row in filtered if row["error"] or (row["remaining"] is not None and row["remaining"] <= 365)),
+            key=lambda row: (
+                0 if row["remaining"] is not None and row["remaining"] <= 0 else
+                1 if row["remaining"] is not None and row["remaining"] <= 90 else
+                2 if row["remaining"] is not None and row["remaining"] <= 180 else
+                3 if row["remaining"] is not None and row["remaining"] <= 365 else 4,
+                row["remaining"] if row["remaining"] is not None else 999999,
+                row["name"], row["lot"]
+            )
+        )[:10]
+
+        cards = {
+            "within365": inventory_stat([row for row in filtered if not row["error"] and row["remaining"] is not None and 0 < row["remaining"] <= 365]),
+            "within180": inventory_stat([row for row in filtered if not row["error"] and row["remaining"] is not None and 0 < row["remaining"] <= 180]),
+            "within90": inventory_stat([row for row in filtered if not row["error"] and row["remaining"] is not None and 0 < row["remaining"] <= 90]),
+            "expired": inventory_stat([row for row in filtered if not row["error"] and row["remaining"] is not None and row["remaining"] <= 0]),
+        }
+
+        return render_template(
+            "dashboard_v2.html",
+            dashboard={
+                "snapshot": snapshot, "as_of": as_of,
+                "filters": {
+                    "q": request.args.get("q", "").strip(),
+                    "warehouse": request.args.get("warehouse", "").strip(),
+                    "availability": selected_availability,
+                },
+                "availability_labels": availability_labels,
+                "all_warehouses": warehouses,
+                "warehouses": warehouse_names,
+                "products": products[:12],
+                "product_count": len(products),
+                "metrics": {
+                    "total": total_qty,
+                    "available": availability["available"]["quantity"],
+                    "unavailable": availability["unavailable"]["quantity"],
+                    "unclassified": availability["unclassified"]["quantity"],
+                    "warehouse_count": len(warehouse_names),
+                },
+                "composition": {
+                    "total": comp_total, "items": product_composition, "gradient": product_gradient
+                },
+                "trend": [],
+                "expiry": {
+                    "cards": cards,
+                    "composition": expiry_composition,
+                    "gradient": expiry_gradient,
+                    "products": expiry_products,
+                    "lots": priority,
+                    "total": expiry_total,
+                },
+                "stagnant": [],
+                "stagnant_summary": {"m3": 0, "m6": 0, "m12": 0, "history_count": 0},
+            },
+            error=None,
+        )
+
     @bp.get("/inventory-location")
     @login_required
     def inventory_location():
