@@ -1,12 +1,12 @@
 {% extends 'base.html' %}
 {% block page_title %}제품 순서 설정{% endblock %}
-{% block breadcrumb %}대시보드 표시 순서 관리{% endblock %}
+{% block breadcrumb %}공장별 대시보드 표시 순서 관리{% endblock %}
 {% block content %}
 <section class="ref-panel order-panel">
   <header class="ref-hero blue">
     <div>
       <h1>제품 표시 순서</h1>
-      <p>대시보드와 제품별 총괄 현황에 표시될 제품 순서를 직접 정합니다.</p>
+      <p>1·2공장 제품과 3공장 제품의 우선순위를 각각 따로 정합니다.</p>
     </div>
     {% if snapshot %}<b>기준일 {{ snapshot.as_of }}</b>{% endif %}
   </header>
@@ -14,22 +14,46 @@
   <form method="post" class="order-editor" id="product-order-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="order-help">
-      <span>위·아래 버튼으로 중요 제품을 위로 올리세요.</span>
-      <strong>{{ products|length|num }}개 제품군</strong>
+      <span>행을 드래그하거나 순번을 직접 입력한 뒤 저장하세요.</span>
+      <strong>1·2공장 {{ products12|length|num }}개 · 3공장 {{ products3|length|num }}개</strong>
     </div>
-    <ol class="order-list" id="product-order-list">
-      {% for name in products %}
-      <li>
-        <input type="hidden" name="product_name" value="{{ name }}">
-        <span class="order-rank">{{ loop.index }}</span>
-        <b>{{ name }}</b>
-        <div class="order-actions">
-          <button type="button" class="btn compact move-up" aria-label="위로">↑</button>
-          <button type="button" class="btn compact move-down" aria-label="아래로">↓</button>
+
+    <div class="order-columns">
+      <section class="order-section">
+        <div class="order-section-head">
+          <h2>1·2공장 제품</h2>
+          <span>{{ products12|length|num }}개</span>
         </div>
-      </li>
-      {% endfor %}
-    </ol>
+        <ol class="order-list sortable-order" data-factory="12">
+          {% for name in products12 %}
+          <li draggable="true">
+            <input type="hidden" name="product_name_12" value="{{ name }}">
+            <span class="drag-handle" title="드래그">⋮⋮</span>
+            <input class="order-position" type="number" min="1" value="{{ loop.index }}" aria-label="순번">
+            <b>{{ name }}</b>
+          </li>
+          {% endfor %}
+        </ol>
+      </section>
+
+      <section class="order-section">
+        <div class="order-section-head">
+          <h2>3공장 제품</h2>
+          <span>{{ products3|length|num }}개</span>
+        </div>
+        <ol class="order-list sortable-order" data-factory="3">
+          {% for name in products3 %}
+          <li draggable="true">
+            <input type="hidden" name="product_name_3" value="{{ name }}">
+            <span class="drag-handle" title="드래그">⋮⋮</span>
+            <input class="order-position" type="number" min="1" value="{{ loop.index }}" aria-label="순번">
+            <b>{{ name }}</b>
+          </li>
+          {% endfor %}
+        </ol>
+      </section>
+    </div>
+
     <div class="order-savebar">
       <a class="btn" href="{{ url_for('expiry.dashboard') }}">대시보드로</a>
       <button class="btn primary">순서 저장</button>
@@ -39,21 +63,52 @@
 
 <script>
 (() => {
-  const list = document.getElementById('product-order-list');
-  if (!list) return;
-  const renumber = () => Array.from(list.children).forEach((li, i) => {
-    const rank = li.querySelector('.order-rank');
-    if (rank) rank.textContent = i + 1;
-  });
-  list.addEventListener('click', (event) => {
-    const up = event.target.closest('.move-up');
-    const down = event.target.closest('.move-down');
-    if (!up && !down) return;
-    const li = event.target.closest('li');
-    if (!li) return;
-    if (up && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling);
-    if (down && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li);
-    renumber();
+  document.querySelectorAll('.sortable-order').forEach(list => {
+    let dragged = null;
+
+    const renumber = () => {
+      Array.from(list.children).forEach((li, index) => {
+        const input = li.querySelector('.order-position');
+        if (input) input.value = index + 1;
+      });
+    };
+
+    list.addEventListener('dragstart', event => {
+      const li = event.target.closest('li');
+      if (!li) return;
+      dragged = li;
+      li.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+    });
+
+    list.addEventListener('dragend', () => {
+      if (dragged) dragged.classList.remove('dragging');
+      dragged = null;
+      renumber();
+    });
+
+    list.addEventListener('dragover', event => {
+      event.preventDefault();
+      if (!dragged) return;
+      const target = event.target.closest('li');
+      if (!target || target === dragged) return;
+      const rect = target.getBoundingClientRect();
+      const after = event.clientY > rect.top + rect.height / 2;
+      list.insertBefore(dragged, after ? target.nextSibling : target);
+    });
+
+    list.addEventListener('change', event => {
+      const input = event.target.closest('.order-position');
+      if (!input) return;
+      const li = input.closest('li');
+      const items = Array.from(list.children);
+      const desired = Math.max(1, Math.min(items.length, parseInt(input.value || '1', 10)));
+      const anchor = list.children[desired - 1];
+      if (anchor && anchor !== li) {
+        list.insertBefore(li, desired - 1 > items.indexOf(li) ? anchor.nextSibling : anchor);
+      }
+      renumber();
+    });
   });
 })();
 </script>
