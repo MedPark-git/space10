@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block page_title %}제품 재고 대시보드{% endblock %}
-{% block breadcrumb %}제품 재고 현황{% endblock %}
+{% block breadcrumb %}제품별 재고 현황{% endblock %}
 {% block content %}
 {% if not dashboard or not dashboard.snapshot %}
 <section class="card empty-state"><h2>등록된 ERP 재고가 없습니다</h2><p>ERP 재고를 등록하면 제품 재고 대시보드가 생성됩니다.</p></section>
@@ -9,7 +9,7 @@
   <header class="ref-hero blue">
     <div>
       <h1>제품 재고 현황</h1>
-      <p>분류를 먼저 보고, 제품별로 완제품·공정중·불용 재고를 한 흐름에서 확인합니다.</p>
+      <p>중요 제품 순서대로 보고, 상세에서는 반복 문구를 줄여 재고 숫자에 집중합니다.</p>
     </div>
     <b>기준일 {{ dashboard.snapshot.as_of }}</b>
   </header>
@@ -51,32 +51,70 @@
     </div>
   </form>
 
-  <section class="inventory-kpi-grid">
+  <section class="inventory-kpi-grid compact-four">
     <article class="inventory-kpi total">
       <span>총재고</span>
       <strong>{{ dashboard.metrics.total|qty }}</strong>
       <small>전체 제품 재고 · EA</small>
     </article>
     <article class="inventory-kpi finished">
-      <span>완제품</span>
-      <strong>{{ dashboard.metrics.finished|qty }}</strong>
-      <small>1·2공장 {{ dashboard.metrics.finished12|qty }} · 3공장 {{ dashboard.metrics.finished3|qty }}</small>
+      <span>가용</span>
+      <strong>{{ dashboard.metrics.available|qty }}</strong>
+      <small>완제품·공정중 정상 위치</small>
     </article>
-    <article class="inventory-kpi work">
-      <span>공정중</span>
-      <strong>{{ dashboard.metrics.work|qty }}</strong>
-      <small>1공장 {{ dashboard.metrics.work1|qty }} · 3공장 {{ dashboard.metrics.work3|qty }}</small>
+    <article class="inventory-kpi other">
+      <span>기타</span>
+      <strong>{{ dashboard.metrics.other|qty }}</strong>
+      <small>{% if dashboard.metrics.location_exception %}3공장 위치예외 {{ dashboard.metrics.location_exception|qty }} 포함{% else %}추가 분류가 필요한 위치{% endif %}</small>
     </article>
     <article class="inventory-kpi unusable">
-      <span>불용/부적합</span>
+      <span>불용</span>
       <strong>{{ dashboard.metrics.unusable|qty }}</strong>
       <small>출고 제외 재고</small>
     </article>
-    <article class="inventory-kpi other">
-      <span>기타/미분류 위치</span>
-      <strong>{{ dashboard.metrics.other|qty }}</strong>
-      <small>창고·장소 기준 추가 분류 필요</small>
-    </article>
+  </section>
+
+  <section class="ref-card product-summary-card">
+    <div class="ref-card-title product-summary-head">
+      <div>
+        <h2>제품별 총괄 현황</h2>
+        <span>규격·분류를 합친 제품 단위 재고입니다.</span>
+      </div>
+      {% if current_user.role in ['admin','editor'] %}
+      <a class="btn compact" href="{{ url_for('expiry.product_order') }}">제품 순서 설정</a>
+      {% endif %}
+    </div>
+    <div class="table-scroll">
+      <table class="ref-table product-summary-table">
+        <thead>
+          <tr><th>순서</th><th>제품명</th><th>공장</th><th>가용</th><th>기타</th><th>불용</th><th>총재고</th></tr>
+        </thead>
+        <tbody>
+          {% for p in dashboard.product_summary %}
+          <tr>
+            <td class="summary-rank">{{ loop.index }}</td>
+            <td class="summary-product"><b>{{ p.name }}</b></td>
+            <td><span class="factory-badge {{ 'factory3' if p.factory_key=='3' else 'factory12' if p.factory_key=='12' else 'unknown' }}">{{ p.factory_label }}</span></td>
+            <td class="good">
+              <b>{{ p.available|qty }}</b>
+              <small>
+                {% if p.factory_key == '3' %}
+                  완제품 {{ p.finished3|qty }} · 공정중 {{ p.work3|qty }}
+                {% elif p.factory_key == '12' %}
+                  완제품 {{ p.finished12|qty }} · 공정중 {{ p.work1|qty }}
+                {% else %}
+                  1·2 완 {{ p.finished12|qty }} · 3 완 {{ p.finished3|qty }} · 1 공정 {{ p.work1|qty }} · 3 공정 {{ p.work3|qty }}
+                {% endif %}
+              </small>
+            </td>
+            <td class="warn"><b>{{ p.other|qty }}</b>{% if p.location_exception %}<small>위치예외 {{ p.location_exception|qty }}</small>{% endif %}</td>
+            <td class="bad"><b>{{ p.unusable|qty }}</b></td>
+            <td class="total-cell"><b>{{ p.total|qty }}</b></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   </section>
 
   <div class="inventory-overview-strip">
@@ -100,35 +138,52 @@
         </div>
       </summary>
       <div class="table-scroll">
-        <table class="ref-table grouped-stock-table">
+        <table class="ref-table grouped-stock-table simplified">
           <thead>
             <tr>
               <th class="category-first">분류</th>
               <th>타입</th>
               <th>사이즈</th>
-              <th>완제품 1·2공장</th>
-              <th>완제품 3공장</th>
-              <th>공정중 1공장</th>
-              <th>공정중 3공장</th>
+              <th>가용</th>
               <th>기타</th>
               <th>불용</th>
               <th>총재고</th>
             </tr>
           </thead>
           <tbody>
+            {% set ns = namespace(category=None, type=None) %}
             {% for p in group.rows %}
-            <tr>
-              <td class="category-first"><span class="category-pill">{{ p.category }}</span></td>
-              <td class="product-type">{{ p.type }}</td>
+            {% set category_changed = (ns.category != p.category) %}
+            {% set type_changed = category_changed or (ns.type != p.type) %}
+            <tr class="{{ 'category-start' if category_changed else '' }}">
+              <td class="category-first">
+                {% if category_changed %}<span class="category-pill">{{ p.category }}</span>{% endif %}
+              </td>
+              <td class="product-type">{% if type_changed %}{{ p.type }}{% endif %}</td>
               <td class="product-size">{{ p.size }}</td>
-              <td class="stock-pos finished12">{{ p.finished12|qty if p.finished12 else '-' }}</td>
-              <td class="stock-pos finished3">{{ p.finished3|qty if p.finished3 else '-' }}</td>
-              <td class="stock-pos work1">{{ p.work1|qty if p.work1 else '-' }}</td>
-              <td class="stock-pos work3">{{ p.work3|qty if p.work3 else '-' }}</td>
-              <td class="stock-pos other">{{ p.other|qty if p.other else '-' }}</td>
+              <td class="stock-pos available-cell">
+                <b>{{ p.available|qty if p.available else '-' }}</b>
+                {% if p.available %}
+                <small>
+                  {% if group.factory_key == '3' %}
+                    완 {{ p.finished3|qty }} · 공정 {{ p.work3|qty }}
+                  {% elif group.factory_key == '12' %}
+                    완 {{ p.finished12|qty }} · 공정 {{ p.work1|qty }}
+                  {% else %}
+                    1·2완 {{ p.finished12|qty }} · 3완 {{ p.finished3|qty }} · 1공정 {{ p.work1|qty }} · 3공정 {{ p.work3|qty }}
+                  {% endif %}
+                </small>
+                {% endif %}
+              </td>
+              <td class="stock-pos other">
+                {{ p.other|qty if p.other else '-' }}
+                {% if p.location_exception %}<small>위치예외 {{ p.location_exception|qty }}</small>{% endif %}
+              </td>
               <td class="stock-pos unusable">{{ p.unusable|qty if p.unusable else '-' }}</td>
               <td class="total-cell"><b>{{ p.total|qty }}</b></td>
             </tr>
+            {% set ns.category = p.category %}
+            {% set ns.type = p.type %}
             {% endfor %}
           </tbody>
         </table>
