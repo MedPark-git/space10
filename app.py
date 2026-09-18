@@ -451,5 +451,8 @@ def register_errors(app):
 
 app = create_app()
 
+# Apply recovery through the actual app:app entrypoint, not only Procfile discovery.
+import recovery_app
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=False)
