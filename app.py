@@ -165,8 +165,6 @@ def create_app(test_config=None):
     register_errors(app)
     from expiry_feature import register_expiry
     register_expiry(app, db, audit, roles)
-    from dashboard_v2 import register_dashboard_v2
-    register_dashboard_v2(app, db)
     app.jinja_env.filters["kst"] = lambda value: value.astimezone(KST).strftime("%Y-%m-%d %H:%M") if value else "-"
     app.jinja_env.filters["num"] = lambda value: f"{float(value or 0):,.0f}"
 
