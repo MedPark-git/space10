@@ -186,14 +186,27 @@ def register_expiry(app, db, audit, roles):
             if bucket == "issue":
                 return unit == "EA" and quantity > 0 and bool(row["error"])
             return True
+        selected_warehouses = [value for value in request.args.getlist("warehouse") if value]
+
+        def matches_query(row):
+            if not q:
+                return True
+            display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"))
+            values = (
+                row.get("erp"), row.get("icube"), row.get("name"), row.get("spec"),
+                row.get("lot"), row.get("warehouse"), row.get("location"),
+                display.get("name"), display.get("type"), display.get("size"), display.get("category"),
+            )
+            return any(q in str(value or "").casefold() for value in values)
+
         filtered = [r for r in rows if
                     (request.args.get("zero") == "1" or number(r["quantity"]) != 0)
                     and in_bucket(r)
-                    and (not request.args.get("warehouse") or r["warehouse"] == request.args["warehouse"])
+                    and (not selected_warehouses or r["warehouse"] in selected_warehouses)
                     and (not request.args.get("location") or (r.get("location") or "") == request.args["location"])
                     and (not request.args.get("factory") or r["factory"] == request.args["factory"])
                     and (not request.args.get("status") or r["status"] == request.args["status"])
-                    and (not q or any(q in str(r.get(k, "")).casefold() for k in ("erp", "icube", "name", "spec", "lot", "warehouse", "location")))]
+                    and matches_query(r)]
         filtered.sort(key=lambda r: (0 if r["error"] else 1, r["expiry"] or "", r["name"], r["lot"]))
         return refs, snapshot, as_of, summary, warehouses, statuses, filtered
 
@@ -423,12 +436,42 @@ def register_expiry(app, db, audit, roles):
         selected_availability = request.args.get("availability", "").strip()
         if selected_availability not in availability_labels:
             selected_availability = ""
+        selected_product_factory = request.args.get("product_factory", "").strip()
+        if selected_product_factory not in {"12", "3"}:
+            selected_product_factory = ""
+
+        def product_factory(display_name, row):
+            if display_name in {"MedParkAlloD", "S1-Allo 덴탈"}:
+                return "3"
+            factory = (row.get("factory") or "").strip()
+            if factory == "3":
+                return "3"
+            if factory in {"1·2", "1,2", "1/2", "1", "2"}:
+                return "12"
+            return "unknown"
+
+        def stock_bucket(row):
+            warehouse = warehouse_key(row.get("warehouse"))
+            location = warehouse_key(row.get("location"))
+            classification, _ = warehouse_classification(row.get("warehouse"), refs)
+            if classification == "unavailable":
+                return "unusable"
+            if warehouse == warehouse_key("완제품창고"):
+                return "finished12"
+            if warehouse == warehouse_key("3공장 완제품창고"):
+                return "finished3"
+            if "공정중" in warehouse:
+                if "3공장" in location:
+                    return "work3"
+                if "1공장" in location:
+                    return "work1"
+            return "other"
 
         q = request.args.get("q", "").strip().casefold()
         positive_ea = [row for row in rows if is_positive_ea(row)]
-        enriched = []
-        for row in positive_ea:
-            row = dict(row)
+        filtered = []
+        for source_row in positive_ea:
+            row = dict(source_row)
             row["availability"], row["availability_source"] = warehouse_classification(row.get("warehouse"), refs)
             row["availability_label"] = availability_labels[row["availability"]]
             display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"))
@@ -437,120 +480,110 @@ def register_expiry(app, db, audit, roles):
             row["display_size"] = display["size"]
             row["display_category"] = display["category"]
             row["display_mapped"] = display["mapped"]
+            row["product_factory"] = product_factory(row["display_name"], row)
+            row["stock_bucket"] = stock_bucket(row)
+            if selected_product_factory and row["product_factory"] != selected_product_factory:
+                continue
+            if selected_availability and row["availability"] != selected_availability:
+                continue
             if q and not any(q in str(value or "").casefold() for value in (
                 row.get("erp"), row.get("icube"), row.get("name"), row.get("spec"),
                 row.get("display_name"), row.get("display_type"), row.get("display_size"),
                 row.get("display_category"), row.get("warehouse"), row.get("location")
             )):
                 continue
-            if selected_availability and row["availability"] != selected_availability:
-                continue
-            enriched.append(row)
-        filtered = enriched
+            filtered.append(row)
 
-        warehouse_totals = {}
+        metric_keys = ("finished12", "finished3", "work1", "work3", "other", "unusable")
+        metric_values = {key: number(0) for key in metric_keys}
         for row in filtered:
-            warehouse = row.get("warehouse") or "미지정"
-            warehouse_totals[warehouse] = warehouse_totals.get(warehouse, number(0)) + number(row["quantity"])
-        class_rank = {"available": 0, "unclassified": 1, "unavailable": 2}
-        warehouse_names = sorted(
-            warehouse_totals,
-            key=lambda name: (
-                class_rank[warehouse_classification(name, refs)[0]],
-                -float(warehouse_totals[name]),
-                dashboard_natural_key(name),
-            ),
-        )
-        warehouse_meta = [{
-            "name": name,
-            "classification": warehouse_classification(name, refs)[0],
-            "label": availability_labels[warehouse_classification(name, refs)[0]],
-            "quantity": warehouse_totals[name],
-        } for name in warehouse_names]
+            metric_values[row["stock_bucket"]] += number(row["quantity"])
 
-        def factory_group(row):
-            factory = (row.get("factory") or "").strip()
-            if factory in {"1·2", "1,2", "1/2", "1", "2"}:
-                return "12"
-            if factory == "3":
-                return "3"
-            return "unknown"
-
-        sections = []
-        for factory_key, factory_label in (("12", "1·2공장 제품"), ("3", "3공장 제품"), ("unknown", "공장 미분류")):
-            matrix = {}
-            section_rows = [row for row in filtered if factory_group(row) == factory_key]
-            for row in section_rows:
-                key = (
-                    row["display_name"], row["display_type"], row["display_size"], row["display_category"]
-                )
-                group = matrix.setdefault(key, {
-                    "name": row["display_name"],
-                    "type": row["display_type"],
-                    "size": row["display_size"],
-                    "category": row["display_category"],
-                    "total": number(0),
-                    "available": number(0),
-                    "unavailable": number(0),
-                    "unclassified": number(0),
-                    "by_warehouse": {},
-                    "icubes": set(),
-                    "erps": set(),
-                    "mapped": True,
-                })
-                qty = number(row["quantity"])
-                warehouse = row.get("warehouse") or "미지정"
-                group["total"] += qty
-                group[row["availability"]] += qty
-                group["by_warehouse"][warehouse] = group["by_warehouse"].get(warehouse, number(0)) + qty
-                if row.get("icube"):
-                    group["icubes"].add(row["icube"])
-                if row.get("erp"):
-                    group["erps"].add(row["erp"])
-                if not row["display_mapped"]:
-                    group["mapped"] = False
-            products = []
-            for group in matrix.values():
-                group["icubes"] = sorted(group["icubes"], key=dashboard_natural_key)
-                group["erps"] = sorted(group["erps"], key=dashboard_natural_key)
-                group["icube_preview"] = ", ".join(group["icubes"][:3]) if group["icubes"] else "ICUBE 미매핑"
-                group["icube_more"] = max(0, len(group["icubes"]) - 3)
-                products.append(group)
-            products.sort(key=lambda g: (
-                dashboard_natural_key(g["name"]),
-                dashboard_natural_key(g["type"]),
-                dashboard_natural_key(g["size"]),
-                dashboard_natural_key(g["category"]),
-            ))
-            sections.append({
-                "key": factory_key,
-                "label": factory_label,
-                "products": products,
-                "count": len(products),
-                "quantity": sum((g["total"] for g in products), number(0)),
+        groups = {}
+        for row in filtered:
+            name = row["display_name"]
+            product = groups.setdefault(name, {
+                "name": name,
+                "factories": set(),
+                "total": number(0),
+                "rows": {},
+                "mapped": True,
             })
+            product["factories"].add(row["product_factory"])
+            product["total"] += number(row["quantity"])
+            if not row["display_mapped"]:
+                product["mapped"] = False
 
-        availability = availability_stats(filtered, refs)
+            row_key = (row["display_category"], row["display_type"], row["display_size"])
+            line = product["rows"].setdefault(row_key, {
+                "category": row["display_category"],
+                "type": row["display_type"],
+                "size": row["display_size"],
+                "finished12": number(0),
+                "finished3": number(0),
+                "work1": number(0),
+                "work3": number(0),
+                "other": number(0),
+                "unusable": number(0),
+                "total": number(0),
+            })
+            qty = number(row["quantity"])
+            line[row["stock_bucket"]] += qty
+            line["total"] += qty
+
+        product_groups = []
+        for product in groups.values():
+            product["rows"] = list(product["rows"].values())
+            product["rows"].sort(key=lambda line: (
+                dashboard_natural_key(line["category"]),
+                dashboard_natural_key(line["type"]),
+                dashboard_natural_key(line["size"]),
+            ))
+            factories = product.pop("factories")
+            if factories == {"3"}:
+                product["factory_key"] = "3"
+                product["factory_label"] = "3공장 제품"
+            elif factories == {"12"}:
+                product["factory_key"] = "12"
+                product["factory_label"] = "1·2공장 제품"
+            elif factories == {"unknown"}:
+                product["factory_key"] = "unknown"
+                product["factory_label"] = "공장 미분류"
+            else:
+                product["factory_key"] = "mixed"
+                product["factory_label"] = "공장 혼합"
+            product_groups.append(product)
+        product_groups.sort(key=lambda group: dashboard_natural_key(group["name"]))
+
         total_qty = sum((number(row["quantity"]) for row in filtered), number(0))
+        finished_total = metric_values["finished12"] + metric_values["finished3"]
+        work_total = metric_values["work1"] + metric_values["work3"]
         master_unmapped = len({row.get("icube") or row.get("erp") for row in filtered if not row.get("display_mapped")})
+
         return {
             "snapshot": snapshot,
             "as_of": as_of,
             "summary": summary,
             "filters": {
                 "q": request.args.get("q", "").strip(),
-                "warehouse": request.args.get("warehouse", "").strip(),
+                "warehouses": [value for value in request.args.getlist("warehouse") if value],
                 "availability": selected_availability,
+                "product_factory": selected_product_factory,
             },
             "availability_labels": availability_labels,
             "all_warehouses": warehouses_from_view,
-            "warehouse_meta": warehouse_meta,
-            "factory_sections": sections,
+            "product_groups": product_groups,
             "metrics": {
                 "total": total_qty,
-                "available": availability["available"]["quantity"],
-                "unavailable": availability["unavailable"]["quantity"],
-                "unclassified": availability["unclassified"]["quantity"],
+                "finished": finished_total,
+                "finished12": metric_values["finished12"],
+                "finished3": metric_values["finished3"],
+                "work": work_total,
+                "work1": metric_values["work1"],
+                "work3": metric_values["work3"],
+                "unusable": metric_values["unusable"],
+                "other": metric_values["other"],
+                "product_groups": len(product_groups),
                 "master_unmapped": master_unmapped,
             },
         }
