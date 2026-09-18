@@ -67,6 +67,8 @@ def verify_authenticated_get_views():
                 body = response.get_data(as_text=True)
                 if 'Internal Server Error' in body or '<title>Request error</title>' in body:
                     raise RuntimeError(f'{endpoint}: error document returned')
+                if endpoint == 'expiry.dashboard' and '<details class="product-stock-group"' not in body:
+                    raise RuntimeError('Dashboard rendered without product stock groups')
                 passed += 1
                 print(f'RECOVERY_RENDER_OK {path} status=200', flush=True)
             except Exception as error:
@@ -93,6 +95,12 @@ def verify_anonymous_protection():
     return {'passed': passed, 'total': len(paths)}
 
 
+# Register before test_client makes its first request. This URL is unique to this
+# release; a 200 here requires the signed-in checks and anonymous guards to pass.
+app.add_url_rule('/health/recovery-routes-20260918-03',
+                 endpoint='recovery_readiness',
+                 view_func=lambda: health_with_render_verification(), methods=['GET'])
+
 app.config['RECOVERY_RENDER_REPORT'] = verify_authenticated_get_views()
 app.config['RECOVERY_AUTH_REPORT'] = verify_anonymous_protection()
 _original_health = app.view_functions['health']
@@ -108,7 +116,7 @@ def health_with_render_verification():
                   authenticated_page_checks=render['passed'],
                   authenticated_page_checks_total=render['total'],
                   anonymous_access_checks=auth['passed'],
-                  recovery_revision='routes-20260918-02',
+                  recovery_revision='routes-20260918-03',
                   render_failures=render['failures'])
     if not passed:
         result.update(status='error', application_ready=False)
