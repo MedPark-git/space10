@@ -167,6 +167,8 @@ def create_app(test_config=None):
     register_expiry(app, db, audit, roles)
     app.jinja_env.filters["kst"] = lambda value: value.astimezone(KST).strftime("%Y-%m-%d %H:%M") if value else "-"
     app.jinja_env.filters["num"] = lambda value: f"{float(value or 0):,.0f}"
+    app.jinja_env.filters["qty"] = lambda value: f"{float(value or 0):,.6f}".rstrip("0").rstrip(".")
+    app.jinja_env.filters["won"] = lambda value: f"{float(value or 0):,.0f}"
 
     if not app.config.get("TESTING") and not missing:
         with app.app_context():
