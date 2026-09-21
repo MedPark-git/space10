@@ -13,7 +13,7 @@ from flask import abort, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import select, text
 
-from inventory_spec_view import clean, factory_for, natural
+from inventory_spec_view import clean, factory_for, natural, product_family
 from product_display_master import lookup
 
 ZERO = Decimal('0')
@@ -326,6 +326,9 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
     if scope not in {'overseas', 'consignment', 'domestic'}:
         scope = 'overseas'
     query = clean(filters.get('q')).casefold()
+    priority_filter = clean(filters.get('priority'))
+    if priority_filter not in {'overdue', 'due_soon', 'schedule_missing', 'ready'}:
+        priority_filter = ''
     start, end = filters.get('start'), filters.get('end')
     stock_by_erp = stock_index(stock, refs)
     mapping = refs.get('mapping', {})
@@ -352,6 +355,7 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
         shown = lookup(clean(mapped.get('icube')).upper(), row['item_name'], row['spec'], refs=refs)
         row['display_name'] = clean(shown.get('name') or row['item_name'])
         row['display_size'] = clean(shown.get('size') or row['spec'])
+        row['family'] = product_family(row['display_name'])
         row['key'] = key_prefix + '|' + row['document'] + '|' + row['line']
         progress = saved.get(row['key']) if isinstance(saved.get(row['key']), dict) else {}
         row['prepared'] = ZERO
@@ -381,28 +385,69 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
     if scope == 'overseas':
         allocate_waiting_stock(period_lines, stock_by_erp)
     visible = []
+    cutoff_date = date.fromisoformat(cutoff)
     for row in period_lines:
-        if query and query not in ' '.join(clean(row.get(k)) for k in ('document','customer','owner','erp','item_name','spec')).casefold():
-            continue
         if scope == 'overseas':
             row['shortage'] = max(row['remaining'] - row['prepared'], ZERO)
             row['status'] = ('준비완료' if row['shortage'] <= 0 else
                              '일부 준비' if row['prepared'] > 0 else '준비중')
         elif scope == 'domestic':
             row['status'], row['shortage'] = '미출고 잔량', None
+        due_text = row.get('ship_due') or row.get('due') or ''
+        due_date = date.fromisoformat(due_text) if due_text else None
+        if due_date and due_date < cutoff_date:
+            row['priority_key'], row['priority_label'], row['priority_rank'] = 'overdue', '납기 경과', 0
+        elif due_date and due_date <= cutoff_date + timedelta(days=7):
+            row['priority_key'], row['priority_label'], row['priority_rank'] = 'due_soon', '7일 이내', 1
+        elif not due_date:
+            row['priority_key'], row['priority_label'], row['priority_rank'] = 'no_due', '납기 미정', 3
+        else:
+            row['priority_key'], row['priority_label'], row['priority_rank'] = 'normal', '예정', 4
+        row['schedule_missing'] = scope == 'overseas' and row['shortage'] > 0 and not row['expected_date']
+        row['is_ready'] = scope == 'overseas' and row['shortage'] <= 0
+        if scope == 'overseas' and row['shortage'] > 0 and row['expected_date']:
+            expected = date.fromisoformat(row['expected_date'])
+            if expected < cutoff_date:
+                row['priority_key'], row['priority_label'], row['priority_rank'] = 'overdue', '예상납기 경과', 0
+            elif expected <= cutoff_date + timedelta(days=7) and row['priority_rank'] > 1:
+                row['priority_key'], row['priority_label'], row['priority_rank'] = 'due_soon', '예상납기 7일 이내', 1
+        if row['is_ready']:
+            if row['priority_key'] == 'overdue':
+                row['priority_label'] = '준비완료·납기경과'
+            elif row['priority_key'] == 'due_soon':
+                row['priority_label'] = '준비완료·출하임박'
+            else:
+                row['priority_key'], row['priority_label'], row['priority_rank'] = 'ready', '준비완료', 5
+        elif row['schedule_missing'] and row['priority_rank'] > 2:
+            row['priority_key'], row['priority_label'], row['priority_rank'] = 'schedule_missing', '예상납기 미입력', 2
+        if query and query not in ' '.join(clean(row.get(k)) for k in (
+                'document','customer','owner','erp','item_name','spec','display_name','family')).casefold():
+            continue
+        if priority_filter == 'ready' and not row['is_ready']:
+            continue
+        if priority_filter == 'schedule_missing' and not row['schedule_missing']:
+            continue
+        if priority_filter and priority_filter not in {'schedule_missing','ready'} and row['priority_key'] != priority_filter:
+            continue
         visible.append(row)
     lines = visible
 
-    lines.sort(key=lambda row: (row['customer'], row.get('ship_due') or row.get('due') or '9999', row['document'], natural(row['line'])))
+    lines.sort(key=lambda row: (row['priority_rank'], row['customer'], row.get('ship_due') or row.get('due') or '9999',
+                               natural(row['family']), natural(row['display_name']), natural(row['display_size']),
+                               row['document'], natural(row['line'])))
     grouped = {}
     for row in lines:
         due = row.get('ship_due') or row.get('due') or ''
-        group_key = (row['customer'], due)
+        group_key = row['customer']
         if group_key not in grouped:
-            grouped[group_key] = {'customer':row['customer'],'due':due,'rows':[], 'documents':set(),
-                                  'owners':set(),'quantity':ZERO,'prepared':ZERO,'shortage':ZERO}
+            grouped[group_key] = {'customer':row['customer'],'due':'','dues':set(),'rows':[], 'documents':set(),
+                                  'owners':set(),'quantity':ZERO,'prepared':ZERO,'shortage':ZERO,
+                                  'overdue_quantity':ZERO,'schedule_missing':0,'priority_rank':9,
+                                  'priority_key':'normal','priority_label':'예정','ready_rows':0}
         group = grouped[group_key]
         group['rows'].append(row)
+        if due:
+            group['dues'].add(due)
         group['documents'].add(row['document'])
         if row.get('owner'):
             group['owners'].add(row['owner'])
@@ -410,16 +455,40 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
         group['prepared'] += row['prepared']
         if row['shortage'] is not None:
             group['shortage'] += row['shortage']
-    groups = sorted(grouped.values(), key=lambda group: (group['due'] or '9999', group['customer']))
+        if row['priority_key'] == 'overdue':
+            group['overdue_quantity'] += row['shortage'] if row['shortage'] is not None else row['remaining']
+        if row['schedule_missing']:
+            group['schedule_missing'] += 1
+        if row['is_ready']:
+            group['ready_rows'] += 1
+        if row['priority_rank'] < group['priority_rank']:
+            group['priority_rank'] = row['priority_rank']
+            group['priority_key'] = row['priority_key']
+            group['priority_label'] = row['priority_label']
+    groups = sorted(grouped.values(), key=lambda group: (group['priority_rank'], min(group['dues']) if group['dues'] else '9999', group['customer']))
     for group in groups:
         group['documents'] = sorted(group['documents'])
         group['owners'] = sorted(group['owners'])
+        group['rows'].sort(key=lambda row: (natural(row['family']), row['priority_rank'],
+            row.get('ship_due') or row.get('due') or '9999', natural(row['display_name']),
+            natural(row['display_size']), row['document'], natural(row['line'])))
+        group['dues'] = sorted(group['dues'])
+        group['due'] = group['dues'][0] if group['dues'] else ''
+        group['due_text'] = (' / '.join(group['dues'][:2]) + (f" 외 {len(group['dues'])-2}건" if len(group['dues']) > 2 else '')) or '예정일 미정'
+        group['progress_rate'] = (group['prepared'] / group['quantity'] * 100
+                                  if scope == 'overseas' and group['quantity'] > 0 else None)
+        group['all_ready'] = scope == 'overseas' and group['rows'] and group['ready_rows'] == len(group['rows'])
     return {'scope':scope,'source_name':source_name,'groups':groups,'lines':lines,
             'customers':len({g['customer'] for g in groups}),'group_count':len(groups),
             'documents':len({row['document'] for row in lines}),
             'quantity':sum((g['quantity'] for g in groups),ZERO),
             'prepared':sum((g['prepared'] for g in groups),ZERO),
-            'shortage':sum((g['shortage'] for g in groups),ZERO)}
+            'shortage':sum((g['shortage'] for g in groups),ZERO),
+            'overdue_quantity':sum((g['overdue_quantity'] for g in groups),ZERO),
+            'overdue_groups':sum(g['priority_key']=='overdue' for g in groups),
+            'schedule_missing':sum(g['schedule_missing'] for g in groups),
+            'ready_groups':sum(bool(g['all_ready']) for g in groups),
+            'priority_filter':priority_filter}
 
 
 def install_order_fulfillment(app, db):
@@ -570,7 +639,8 @@ def install_order_fulfillment(app, db):
             shipments, shipment_import = shipment_rows(
                 needed_erps, start, end, 'T/T' if scope == 'overseas' else 'DOMESTIC')
         board = build_board(orders, quotes, shipments, movements, stock_rows(needed_erps), all_refs, progress,
-                            {'q':request.args.get('q'),'scope':scope,'start':start,'end':end})
+                            {'q':request.args.get('q'),'priority':request.args.get('priority'),
+                             'scope':scope,'start':start,'end':end})
         return render_template('order_fulfillment.html',board=board,start=start,end=end,
             order_import=order_import,quote_import=quote_import,shipment_import=shipment_import,movement_import=movement_import,
             can_edit=current_user.role in {'admin','editor'})
