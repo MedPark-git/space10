@@ -199,6 +199,14 @@ def register_expiry(app, db, audit, roles):
             )
             return any(q in str(value or "").casefold() for value in values)
 
+        def matches_product_factory(row):
+            from inventory_spec_view import factory_for, FACTORIES
+            selected = request.args.get("product_factory", "")
+            if selected not in FACTORIES:
+                return True
+            shown = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"))
+            return factory_for(row.get("icube") or "", shown.get("name"), row, refs) == selected
+
         filtered = [r for r in rows if
                     (request.args.get("zero") == "1" or number(r["quantity"]) != 0)
                     and in_bucket(r)
@@ -206,7 +214,7 @@ def register_expiry(app, db, audit, roles):
                     and (not request.args.get("location") or (r.get("location") or "") == request.args["location"])
                     and (not request.args.get("factory") or r["factory"] == request.args["factory"])
                     and (not request.args.get("status") or r["status"] == request.args["status"])
-                    and matches_query(r)]
+                    and matches_query(r) and matches_product_factory(r)]
         filtered.sort(key=lambda r: (0 if r["error"] else 1, r["expiry"] or "", r["name"], r["lot"]))
         return refs, snapshot, as_of, summary, warehouses, statuses, filtered
 
@@ -884,103 +892,8 @@ def register_expiry(app, db, audit, roles):
     @bp.get("/dashboard-expiry")
     @login_required
     def dashboard_expiry():
-        refs, snapshot, as_of, summary, warehouses, _, rows = current_view()
-        positive_ea = [row for row in rows if is_positive_ea(row)]
-
-        band_defs = [
-            ("over24", "24개월 이상", "#17689a"),
-            ("m6_24", "6~24개월", "#42a0cf"),
-            ("m3_6", "3~6개월", "#62cdb4"),
-            ("due90", "3개월 이내", "#f2c85c"),
-            ("expired", "유효기간 만료", "#ef7777"),
-            ("issue", "확인 필요", "#9b8ac4"),
-        ]
-        def band(row):
-            if row["error"] or row["remaining"] is None:
-                return "issue"
-            if row["remaining"] <= 0:
-                return "expired"
-            if row["remaining"] <= 90:
-                return "due90"
-            if row["remaining"] <= 180:
-                return "m3_6"
-            if row["remaining"] <= 730:
-                return "m6_24"
-            return "over24"
-
-        totals = {key: number(0) for key, _, _ in band_defs}
-        product_map = {}
-        for row in positive_ea:
-            b = band(row)
-            qty = number(row["quantity"])
-            totals[b] += qty
-            key = (row["erp"], row["name"], row.get("spec") or "규격 미등록")
-            group = product_map.setdefault(key, {
-                "erp": row["erp"], "name": row["name"], "spec": row.get("spec") or "규격 미등록",
-                "total": number(0), "bands": {k: number(0) for k, _, _ in band_defs},
-            })
-            group["total"] += qty
-            group["bands"][b] += qty
-
-        products = []
-        for group in product_map.values():
-            group["segments"] = []
-            for key, label, color in band_defs:
-                qty = group["bands"][key]
-                group["segments"].append({
-                    "key": key, "label": label, "color": color, "quantity": qty,
-                    "percent": float(qty * 100 / group["total"]) if group["total"] else 0,
-                })
-            group["risk"] = group["bands"]["expired"] + group["bands"]["due90"] + group["bands"]["m3_6"] + group["bands"]["issue"]
-            products.append(group)
-        products.sort(key=lambda g: (g["risk"], g["total"]), reverse=True)
-
-        expiry_total = sum(totals.values(), number(0))
-        composition = []
-        gradient_parts = []
-        cursor = 0.0
-        for key, label, color in band_defs:
-            qty = totals[key]
-            percent = float(qty * 100 / expiry_total) if expiry_total else 0
-            start_pct = cursor
-            cursor += percent
-            composition.append({"key": key, "label": label, "color": color, "quantity": qty, "percent": percent})
-            if percent > 0:
-                gradient_parts.append(f"{color} {start_pct:.3f}% {cursor:.3f}%")
-        gradient = "conic-gradient(" + ",".join(gradient_parts) + ")" if gradient_parts else "#e8eef3"
-
-        cards = {
-            "within365": inventory_stat([r for r in positive_ea if not r["error"] and r["remaining"] is not None and 0 < r["remaining"] <= 365]),
-            "within180": inventory_stat([r for r in positive_ea if not r["error"] and r["remaining"] is not None and 0 < r["remaining"] <= 180]),
-            "within90": inventory_stat([r for r in positive_ea if not r["error"] and r["remaining"] is not None and 0 < r["remaining"] <= 90]),
-            "expired": inventory_stat([r for r in positive_ea if not r["error"] and r["remaining"] is not None and r["remaining"] <= 0]),
-        }
-        risk_lots = sorted(
-            [r for r in positive_ea if r["error"] or (r["remaining"] is not None and r["remaining"] <= 365)],
-            key=lambda r: (
-                0 if r["remaining"] is not None and r["remaining"] <= 0 else
-                1 if r["remaining"] is not None and r["remaining"] <= 90 else
-                2 if r["remaining"] is not None and r["remaining"] <= 180 else
-                3,
-                r["remaining"] if r["remaining"] is not None else 999999,
-                -float(number(r["quantity"])),
-            ),
-        )[:10]
-
-        return render_template(
-            "expiry_dashboard_only.html",
-            dashboard={
-                "snapshot": snapshot,
-                "as_of": as_of,
-                "cards": cards,
-                "composition": composition,
-                "gradient": gradient,
-                "expiry_total": expiry_total,
-                "products": products[:10],
-                "risk_lots": risk_lots,
-                "warehouses": warehouses,
-            },
-        )
+        from expiry_display import render_expiry_display
+        return render_expiry_display(current_view)
 
 
     @bp.get("/dashboard-v2")
