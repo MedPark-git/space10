@@ -151,7 +151,8 @@ def merge_rows(before, incoming):
 def stock_index(stock, refs):
     result = defaultdict(lambda: {'finished':ZERO, 'waiting':ZERO, 'consignment':ZERO, 'factory':'unknown'})
     mapping = refs.get('mapping', {})
-    for entry in stock.payload if stock is not None else []:
+    payload = getattr(stock, 'payload', stock) if stock is not None else []
+    for entry in payload or []:
         raw = entry.get('data', {}) if isinstance(entry, dict) else {}
         if not isinstance(raw, dict) or clean(raw.get('account')) != '제품' or clean(raw.get('unit')).upper() != 'EA':
             continue
@@ -444,6 +445,21 @@ def install_order_fulfillment(app, db):
             Import.kind == kind, Import.committed_at.is_not(None)
         ).order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(1)) is not None
 
+    def stock_rows(erps):
+        """Read only the latest stock rows needed by the current board."""
+        snapshot_id = db.session.scalar(select(Import.id).where(
+            Import.kind == 'stock', Import.committed_at.is_not(None)
+        ).order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(1))
+        if not snapshot_id or not erps:
+            return []
+        return list(db.session.execute(text("""
+            SELECT expanded.item
+            FROM expiry_imports AS source
+            CROSS JOIN LATERAL json_array_elements(source.payload) AS expanded(item)
+            WHERE source.id = :snapshot_id
+              AND expanded.item->'data'->>'erp' = ANY(CAST(:erps AS text[]))
+        """), {'snapshot_id': snapshot_id, 'erps': sorted(erps)}).scalars())
+
     def refs():
         result = {}
         for row in db.session.scalars(select(Reference).order_by(Reference.kind, Reference.key)):
@@ -524,7 +540,9 @@ def install_order_fulfillment(app, db):
         end = clean(request.args.get('end')) or latest_date.isoformat()
         all_refs = refs()
         progress = all_refs.get('order_progress', {})
-        board = build_board(orders, quotes, shipments, movements, latest('stock'), all_refs, progress,
+        needed_erps = {clean(row.get('erp')) for row in relevant
+                       if (not start or row['date'] >= start) and (not end or row['date'] <= end)}
+        board = build_board(orders, quotes, shipments, movements, stock_rows(needed_erps), all_refs, progress,
                             {'q':request.args.get('q'),'scope':scope,'start':start,'end':end})
         return render_template('order_fulfillment.html',board=board,start=start,end=end,
             order_import=order_import,quote_import=quote_import,shipment_import=shipment_import,movement_import=movement_import,
