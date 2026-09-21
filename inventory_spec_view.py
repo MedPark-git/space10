@@ -128,9 +128,17 @@ def stock_bucket(raw, factory, refs):
     else:
         physical = 'other'
     if state not in {'available', 'unavailable', 'unclassified'}:
-        state = 'available' if physical.startswith('finished') else 'unclassified'
+        state = 'unclassified'
     exception = factory == '3' and physical in {'finished12', 'work12'}
-    bucket = 'unusable' if state == 'unavailable' else 'other' if exception else 'available' if state == 'available' else 'other'
+    if state == 'unavailable':
+        bucket = 'unusable'
+    elif exception:
+        bucket = 'other'
+    elif physical.startswith(('finished', 'work')):
+        # Business rule: available stock is finished-goods warehouse + work-in-process warehouse only.
+        bucket = 'available'
+    else:
+        bucket = 'other'
     return bucket, physical, exception
 
 
