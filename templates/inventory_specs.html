@@ -2,8 +2,8 @@
 {% block page_title %}제품 재고 현황{% endblock %}
 {% block breadcrumb %}공장별 제품 총수량과 분류·타입·규격별 재고{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260921-01') }}">
-<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-release="inventory-specs-20260921-01">
+<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260921-02') }}">
+<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-release="inventory-specs-20260921-02">
 <header class="iv-hero">
   <div><p class="iv-eyebrow">MEDPARK INVENTORY</p><h1>제품 재고 현황</h1><p>제품별 총수량과 분류·타입·규격별 재고를 한 화면에서 확인합니다.</p></div>
   <div class="iv-date">재고 기준일<strong>{{ board.snapshot_date if board else '-' }}</strong></div>
@@ -113,5 +113,5 @@
 <section class="iv-empty">등록된 ERP 재고가 없습니다.</section>
 {% endif %}
 </div>
-<script src="{{ url_for('static', filename='inventory_specs.js', v='20260921-01') }}" defer></script>
+<script src="{{ url_for('static', filename='inventory_specs.js', v='20260921-02') }}" defer></script>
 {% endblock %}
