@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block page_title %}제품 표시 기준표 관리{% endblock %}
+{% block breadcrumb %}재고·유효기간 제품명 / 타입 / 규격 / 분류{% endblock %}
+{% block content %}
+<style>
+.pm-wrap{display:grid;gap:14px}.pm-hero{display:flex;justify-content:space-between;gap:16px;align-items:center;padding:18px;background:#174f63;color:#fff;border-radius:8px}.pm-hero h1{margin:0 0 4px;font-size:22px}.pm-hero p{margin:0;font-size:13px}.pm-count{text-align:right;white-space:nowrap}.pm-count strong{display:block;font-size:25px}.pm-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}.pm-card{padding:16px;background:#fff;border:1px solid #c4d2da;border-radius:8px}.pm-card h2{margin:0 0 8px;font-size:17px}.pm-card p,.pm-card li{font-size:13px;line-height:1.55}.pm-actions{display:flex;gap:8px;flex-wrap:wrap}.pm-btn{display:inline-block;padding:9px 12px;border:1px solid #9eb2be;border-radius:5px;background:#f2f6f8;font-weight:800;font-size:13px;cursor:pointer}.pm-btn-primary{background:#17657b;color:#fff;border-color:#17657b}.pm-upload{display:grid;gap:10px}.pm-upload input[type=file]{padding:10px;border:1px dashed #93aab7;background:#f8fafb}.pm-table-wrap{overflow:auto}.pm-table{width:100%;min-width:850px;border-collapse:collapse}.pm-table th,.pm-table td{border:1px solid #cad5dc;padding:6px;font-size:12px;text-align:left}.pm-table th{background:#e9f0f4}.pm-note{padding:10px;border-left:4px solid #d88c19;background:#fff6df;font-size:12px}@media(max-width:850px){.pm-grid{grid-template-columns:1fr}}
+</style>
+<div class="pm-wrap">
+ <div class="pm-hero"><div><h1>제품 표시 기준표 관리</h1><p>재고현황과 유효기간 화면에서 사용하는 품번별 제품명·타입·사이즈·분류를 관리합니다.</p></div><div class="pm-count"><strong>{{ count|num }}건</strong><span>{{ source }}</span>{% if updated_at %}<small><br>{{ updated_at }}</small>{% endif %}</div></div>
+ <div class="pm-grid">
+  <section class="pm-card"><h2>1. 현재 기준표 다운로드</h2><p>파일을 내려받아 필요한 셀만 수정하십시오. 첫 행의 열 이름과 열 순서는 바꾸지 마십시오.</p><div class="pm-actions"><a class="pm-btn pm-btn-primary" href="{{ url_for('expiry.product_display_master_download') }}">기준표 .md 다운로드</a></div></section>
+  <section class="pm-card"><h2>2. 수정 파일 적용</h2><form class="pm-upload" method="post" enctype="multipart/form-data"><input type="file" name="master_file" accept=".md,.csv,.tsv,text/markdown,text/csv" required><button class="pm-btn pm-btn-primary" type="submit">파일 검사 후 적용</button></form><p>품번 중복, 필수값 누락, 열 개수 오류가 있으면 기존 기준표는 변경되지 않습니다.</p></section>
+ </div>
+ <p class="pm-note"><b>공장 기준:</b> S1-Allo 메디컬과 S1-Allo 덴탈은 제품명 기준으로 항상 3공장에 표시됩니다.</p>
+ <section class="pm-card"><h2>현재 기준표 미리보기</h2><p>전체 {{ count|num }}건 중 앞 30건입니다. 전체 내용은 다운로드 파일에서 확인할 수 있습니다.</p><div class="pm-table-wrap"><table class="pm-table"><thead><tr><th>품번</th><th>품명</th><th>규격</th><th>제품명</th><th>타입</th><th>사이즈</th><th>분류</th></tr></thead><tbody>{% for row in preview %}<tr><td>{{ row.code }}</td><td>{{ row.item_name }}</td><td>{{ row.spec }}</td><td><b>{{ row.name }}</b></td><td>{{ row.type }}</td><td>{{ row.size }}</td><td>{{ row.category }}</td></tr>{% endfor %}</tbody></table></div></section>
+</div>
+{% endblock %}
