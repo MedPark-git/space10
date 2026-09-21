@@ -261,6 +261,14 @@ def build_board(entries, refs, filters, snapshot_date):
             group['rows'] = lines
             group['specs'] = sorted({row['size'] for row in lines if row['size'] not in {'', '-'}}, key=natural)
             group['types'] = sorted({row['type'] for row in lines}, key=natural)
+            spec_summary = {}
+            for row in lines:
+                label = row['type'] if group['tendon'] else row['size']
+                summary = spec_summary.setdefault(label, dict(label=label, **totals()))
+                for field in totals():
+                    summary[field] += row[field]
+            group['spec_summary'] = list(spec_summary.values())
+            group['spec_summary'].sort(key=lambda item: natural(item['label']))
             categories = []
             for row in lines:
                 row['original_specs'] = sorted(row.pop('original_specs'), key=natural)
