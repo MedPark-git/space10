@@ -26,7 +26,7 @@
       <p>완제품창고 재고 + 공정중창고 재고를 가용재고로 보고, 제품별 상세 재고를 확인합니다.</p>
     </div>
     <div class="iv-hero-side"><div class="iv-date">재고 기준일<strong>{{ board.snapshot_date if board else '-' }}</strong></div>
-      {% if board %}<div class="iv-print-actions"><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', capture='1') }}">3공장 인쇄</a></div>{% endif %}
+      {% if board %}<div class="iv-print-actions"><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, capture='1') }}">3공장 인쇄</a></div>{% endif %}
     </div>
   </header>
 
@@ -56,7 +56,7 @@
         <button type="button" id="iv-all-warehouses">전체 창고</button>
       </div>
     </details>
-    <label class="iv-switch"><input type="checkbox" name="show_value" value="1" id="iv-money" {{ 'checked' if board.filters.show_value }}><span>재고금액 보기</span></label>
+    <span class="iv-switch"><span>재고금액 상시 표시</span></span>
     <label>평균 출고 기준
       <select name="shipment_period"><option value="3" {{ 'selected' if board.filters.shipment_period==3 }}>최근 3개월</option><option value="6" {{ 'selected' if board.filters.shipment_period==6 }}>최근 6개월</option><option value="12" {{ 'selected' if board.filters.shipment_period==12 }}>최근 12개월 범위</option></select>
     </label>
@@ -109,8 +109,8 @@
     <div>
       <button type="button" id="iv-expand">전체 펼치기</button>
       <button type="button" id="iv-collapse">전체 접기</button>
-      <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', capture='1') }}">1·2공장 캡처</a>
-      <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', capture='1') }}">3공장 캡처</a>
+      <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, capture='1') }}">1·2공장 캡처</a>
+      <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, capture='1') }}">3공장 캡처</a>
       {% if can_edit %}
       <a href="{{ url_for('expiry.product_display_master') }}">제품 기준표 관리</a>
       <a href="{{ url_for('expiry.product_order') }}">제품 순서 설정</a>
