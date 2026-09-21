@@ -10,7 +10,7 @@ from product_display_master import lookup as product_lookup
 
 ZERO = Decimal('0')
 FACTORIES = {'12': '1·2공장', '3': '3공장', 'unknown': '공장 확인 필요'}
-OVERRIDES = {'MedParkAlloD': '3', 'S1-Allo 덴탈': '3'}
+OVERRIDES = {'MedParkAlloD': '3', 'S1-Allo 메디컬': '3', 'S1-Allo 덴탈': '3'}
 
 
 def clean(value):
@@ -197,7 +197,7 @@ def build_board(entries, refs, filters, snapshot_date):
         erp = clean(raw.get('erp'))
         mapped = mapping.get(erp) or {}
         code = clean(mapped.get('icube') or raw.get('icube')).upper()
-        shown = product_lookup(code, raw.get('name'), raw.get('spec'))
+        shown = product_lookup(code, raw.get('name'), raw.get('spec'), refs=refs)
         name = display(shown.get('name') or raw.get('name')) or '제품명 미등록'
         type_name = display(shown.get('type')) or '타입 미등록'
         size = display(shown.get('size'))
