@@ -109,6 +109,32 @@ def complete_month_end(latest):
     return prior.strftime('%Y-%m')
 
 
+def shipment_average_index(app, db, period=6):
+    """Return one monthly average per ERP code for dashboard use."""
+    if period not in {3, 6, 12}:
+        period = 6
+    Import = app.extensions['expiry_models']['Import']
+    saved = db.session.scalar(select(Import).where(
+        Import.kind == 'shipment', Import.committed_at.is_not(None)
+    ).order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(1))
+    rows = saved.payload if saved is not None else seed_rows()
+    parsed = [(date.fromisoformat(row['date']), clean(row['erp']), number(row['quantity'])) for row in rows]
+    if not parsed:
+        return {}, dict(period=period, months=[], source=None)
+    first_month = min(day for day, _, _ in parsed).strftime('%Y-%m')
+    end_month = complete_month_end(max(day for day, _, _ in parsed))
+    months = [month for month in month_sequence(end_month, period) if month >= first_month]
+    monthly = defaultdict(Decimal)
+    for day, erp, quantity in parsed:
+        monthly[(erp, day.strftime('%Y-%m'))] += quantity
+    codes = {erp for _, erp, _ in parsed}
+    averages = {
+        erp: sum((monthly.get((erp, month), ZERO) for month in months), ZERO) / len(months)
+        for erp in codes
+    } if months else {}
+    return averages, dict(period=period, months=months, source=saved)
+
+
 def build_analysis(shipment_rows, stock_payload, refs, selected_period=6):
     parsed = [(date.fromisoformat(row['date']), clean(row['erp']), number(row['quantity']))
               for row in shipment_rows]
