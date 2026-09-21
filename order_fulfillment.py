@@ -239,7 +239,15 @@ def build_board(orders, quotes, shipments, stock, refs, saved, filters):
             row['status'], row['shortage'] = '재고이동 자료 확인 필요', None
         lines.append(row)
 
-    apply_fifo_fulfillment(lines, shipments, scope)
+    if shipments:
+        apply_fifo_fulfillment(lines, shipments, scope)
+    elif scope in {'overseas','domestic'}:
+        from shipment_fulfillment_seed import FULFILLED
+        for row in lines:
+            row['original_quantity'] = row['quantity']
+            completed = min(number(FULFILLED.get(row['key'])), row['quantity'])
+            row['fulfilled'] = completed
+            row['remaining'] = row['quantity'] - completed
     visible = []
     for row in lines:
         if (start and row['date'] < start) or (end and row['date'] > end):
