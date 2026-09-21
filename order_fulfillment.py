@@ -9,7 +9,7 @@ import gzip
 import re
 import uuid
 
-from flask import abort, flash, redirect, render_template, request, url_for
+from flask import Response, abort, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import select, text
 
@@ -494,6 +494,8 @@ def install_order_fulfillment(app, db):
 
     @login_required
     def view():
+        if request.method == 'GET' and request.args.get('_health') == '1':
+            return Response('order-fulfillment-ok', mimetype='text/plain')
         if request.method == 'POST':
             if current_user.role not in {'admin','editor'}:
                 abort(403)
