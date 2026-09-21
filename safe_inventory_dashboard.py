@@ -10,11 +10,13 @@ from expiry_engine import calculate, family_rules, index_mts, number, stock_scop
 from product_display_master import lookup as product_display_lookup
 from product_display_admin import install_product_display_admin
 from shipment_analysis import install_shipment_analysis, shipment_average_index
+from unit_cost_admin import cost_history_with_seed, install_unit_cost_admin
 
 
 def make_inventory_dashboard_view(app, db):
     install_product_display_admin(app, db)
     install_shipment_analysis(app, db)
+    install_unit_cost_admin(app, db)
     Reference = app.extensions["expiry_models"]["Reference"]
     Import = app.extensions["expiry_models"]["Import"]
 
@@ -84,24 +86,7 @@ def make_inventory_dashboard_view(app, db):
         return [str(v) for v in values if str(v).strip()]
 
     def build_cost_index(refs):
-        result = {}
-        for payload in refs.get("unit_cost", {}).values():
-            if not isinstance(payload, dict):
-                continue
-            icube = str(payload.get("icube") or "").strip().upper()
-            month = str(payload.get("month") or "").strip()
-            if not icube or not re.fullmatch(r"\d{4}-\d{2}", month):
-                continue
-            try:
-                cost = number(payload.get("cost"))
-            except Exception:
-                continue
-            if cost < 0:
-                continue
-            result.setdefault(icube, []).append((month, cost))
-        for values in result.values():
-            values.sort(key=lambda item: item[0])
-        return result
+        return cost_history_with_seed(refs)
 
     def effective_cost(indexed, icube, as_of):
         code = str(icube or "").strip().upper()
