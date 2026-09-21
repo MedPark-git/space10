@@ -4,9 +4,9 @@ import io
 import re
 from datetime import datetime, timezone
 
-from flask import Response, flash, redirect, render_template, request, url_for
-from flask_login import current_user
-from sqlalchemy import select
+from flask import Response, abort, flash, redirect, render_template, request, url_for
+from flask_login import current_user, login_required
+from sqlalchemy import select, text
 
 from product_display_data import DATA
 
@@ -155,3 +155,81 @@ def register_product_display_admin(bp, db, audit, roles, Reference, references, 
             mimetype='text/markdown; charset=utf-8',
             headers={'Content-Disposition': 'attachment; filename=product_display_master.md'},
         )
+
+
+def install_product_display_admin(app, db):
+    """Install only the isolated product-master routes; leave existing expiry routes untouched."""
+    if 'expiry.product_display_master' in app.view_functions:
+        return
+    Reference = app.extensions['expiry_models']['Reference']
+
+    def references():
+        result = {}
+        for row in db.session.scalars(select(Reference).order_by(Reference.kind, Reference.key)):
+            result.setdefault(row.kind, {})[row.key] = row.payload
+        return result
+
+    def require_editor():
+        if current_user.role not in {'admin', 'editor'}:
+            abort(403)
+
+    @login_required
+    def master_view():
+        require_editor()
+        if request.method == 'POST':
+            upload = request.files.get('master_file')
+            if upload is None or not upload.filename:
+                flash('수정한 기준표 파일을 선택해 주세요.', 'error')
+                return redirect(url_for('expiry.product_display_master'))
+            raw = upload.stream.read(MAX_FILE_SIZE + 1)
+            if len(raw) > MAX_FILE_SIZE:
+                flash('기준표 파일은 2MB 이하만 등록할 수 있습니다.', 'error')
+                return redirect(url_for('expiry.product_display_master'))
+            try:
+                items = parse_master(raw.decode('utf-8-sig'), upload.filename)
+            except UnicodeDecodeError:
+                flash('UTF-8로 저장된 파일만 등록할 수 있습니다.', 'error')
+                return redirect(url_for('expiry.product_display_master'))
+            except ValueError as error:
+                flash(str(error), 'error')
+                return redirect(url_for('expiry.product_display_master'))
+            db.session.execute(text('SELECT pg_advisory_xact_lock(73190422)'))
+            row = db.session.scalar(select(Reference).where(
+                Reference.kind == 'product_display', Reference.key == 'master'))
+            if row is None:
+                row = Reference(kind='product_display', key='master')
+                db.session.add(row)
+            row.payload = {
+                'items': items,
+                'count': len(items),
+                'filename': upload.filename,
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+            }
+            row.updated_by = current_user.id
+            row.updated_at = datetime.now(timezone.utc)
+            db.session.commit()
+            app.logger.info('PRODUCT_DISPLAY_MASTER_UPDATED user=%s items=%s', current_user.id, len(items))
+            flash(f'제품 표시 기준표 {len(items):,}건을 적용했습니다.', 'success')
+            return redirect(url_for('expiry.product_display_master'))
+        items, payload = current_items(references())
+        preview = [dict(code=code, **row) for code, row in list(items.items())[:30]]
+        return render_template('product_display_master.html', count=len(items), preview=preview,
+                               source=payload.get('filename') or '현재 배포 기준표',
+                               updated_at=payload.get('updated_at'))
+
+    @login_required
+    def master_download():
+        require_editor()
+        items, _ = current_items(references())
+        return Response(
+            '\ufeff' + markdown_file(items),
+            mimetype='text/markdown; charset=utf-8',
+            headers={'Content-Disposition': 'attachment; filename=product_display_master.md'},
+        )
+
+    app.add_url_rule('/expiry/product-display-master',
+                     endpoint='expiry.product_display_master',
+                     view_func=master_view, methods=['GET', 'POST'])
+    app.add_url_rule('/expiry/product-display-master/download',
+                     endpoint='expiry.product_display_master_download',
+                     view_func=master_download, methods=['GET'])
