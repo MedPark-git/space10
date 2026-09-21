@@ -15,6 +15,7 @@
 .ex-filters {display:flex;flex-wrap:wrap;gap:8px;align-items:end;padding:12px;background:white;border:1px solid #c6d3dc;border-radius:8px}
 .ex-filters label {display:grid;gap:3px;font-size:12px;font-weight:700}.ex-filters input,.ex-filters select {height:33px;max-width:230px;padding:5px;border:1px solid #b8c8d2;border-radius:4px;font-size:12px}
 .ex-filters label.ex-check {display:flex;align-items:center}.ex-filters label.ex-check input {height:auto}
+.ex-band-picker{min-width:310px}.ex-band-picker>span{font-size:12px;font-weight:800}.ex-band-options{display:flex;gap:5px;flex-wrap:wrap;margin-top:3px}.ex-band-options label{display:flex;align-items:center;gap:3px;padding:5px 7px;border:1px solid #b8c8d2;border-radius:4px;background:#f7fafb;font-weight:600}.ex-band-options input{height:auto!important;margin:0}
 .ex-filters button,.ex-filters a {font-size:12px;padding:7px 10px;background:#f2f6f8;border:1px solid #b8c8d2;border-radius:4px;cursor:pointer}
 .ex-stats {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}
 .ex-stats a {border:1px solid #c2d0da;border-top:3px solid #578476;border-radius:6px;background:#fff;padding:9px;display:grid;gap:3px;font-size:11px}
@@ -39,7 +40,7 @@
 @media(max-width:1000px){.ex-stats{grid-template-columns:repeat(3,1fr)}}
 @media print { @page {size:A4 landscape;margin:7mm} body:has(.ex-board) .sidebar,body:has(.ex-board) .app>header,.ex-filters,.ex-tools,.ex-table details{display:none!important} body:has(.ex-board) .app{margin:0} body:has(.ex-board) main{padding:0;max-width:none}.ex-stats{grid-template-columns:repeat(6,1fr)}.ex-product{break-inside:auto}.ex-table tr{break-inside:avoid}.ex-table thead{display:table-header-group}.ex-table-wrap{overflow:visible}.ex-table{min-width:0}.ex-table th,.ex-table td{font-size:8pt;padding:3px}.ex-product>summary{break-after:avoid}.ex-factory{break-before:page}.ex-factory:first-of-type{break-before:auto} }
 </style>
-<div class="ex-board" data-release="expiry-display-20260921-07">
+<div class="ex-board" data-release="expiry-display-20260921-08">
  <div class="ex-title"><div><h1>제품별 유효기간 현황</h1><p>제품 → 국내/CE 등 구분 → 타입 → 규격 → LOT별 잔여기간</p></div><div class="ex-title-side"><div>재고 기준일 {{ snapshot.as_of if snapshot else '-' }}<br>유효기간 평가일 {{ as_of }}</div><div class="ex-print-actions"><a href="{{ filter_url(capture='1', product_factory='12') }}">1·2공장 인쇄</a><a href="{{ filter_url(capture='1', product_factory='3') }}">3공장 인쇄</a></div></div></div>
  <form class="ex-filters" method="get">
   {% if snapshot %}<input type="hidden" name="snapshot" value="{{ snapshot.id }}">{% endif %}
@@ -47,14 +48,14 @@
   {% if request.args.get('location') %}<input type="hidden" name="location" value="{{ request.args.location }}">{% endif %}
   <label>제품·규격·LOT 검색<input name="q" value="{{ request.args.get('q','') }}" placeholder="제품명, 국내/CE, 타입, 규격, LOT"></label>
   <label>공장<select name="product_factory"><option value="">전체</option>{% for k,v in factories.items() %}<option value="{{ k }}" {{ 'selected' if k==selected_factory }}>{{ v }}</option>{% endfor %}</select></label>
-  <label>잔여기간<select name="bucket"><option value="">전체</option>{% for k,v in bands %}<option value="{{ k }}" {{ 'selected' if request.args.get('bucket')==k }}>{{ v }}</option>{% endfor %}{% for k,v in [('all_ea','양수 EA'),('negative','음수재고'),('non_ea','EA 외 단위')] %}<option value="{{ k }}" {{ 'selected' if request.args.get('bucket')==k }}>{{ v }}</option>{% endfor %}</select></label>
+  <div class="ex-band-picker"><span>유효기간 구간 복수 선택</span><div class="ex-band-options">{% for k,v in bands %}<label><input type="checkbox" name="expiry_band" value="{{ k }}" {{ 'checked' if k in selected_bands }}>{{ v }}</label>{% endfor %}</div></div>
   <label>평가일<input type="date" name="as_of" value="{{ as_of }}" required></label>
   <label>창고<select name="warehouse" multiple size="2"><option value="" {{ 'selected' if not request.args.getlist('warehouse') }}>전체</option>{% for w in warehouses %}<option value="{{ w }}" {{ 'selected' if w in request.args.getlist('warehouse') }}>{{ w }}</option>{% endfor %}</select></label>
   <label>상태<select name="status"><option value="">전체</option>{% for s in statuses %}<option {{ 'selected' if request.args.get('status')==s }}>{{ s }}</option>{% endfor %}</select></label>
   <label class="ex-check"><input type="checkbox" name="zero" value="1" {{ 'checked' if request.args.get('zero')=='1' }}>0 재고 포함</label>
   <button>조회</button><a href="{{ url_for(request.endpoint) }}">초기화</a><a href="{{ export_url }}">조회 결과 CSV</a>
  </form>
- <div class="ex-stats">{% for k,label in bands %}<a href="{{ filter_url(bucket=k) }}" class="ex-{{ k }}" aria-current="{{ 'true' if request.args.get('bucket')==k else 'false' }}"><span>{{ label }}</span><b>{{ board.stats[k].quantity|qty }} <small>EA</small></b><small>{{ board.stats[k].lots|length }} LOT</small></a>{% endfor %}</div>
+ <div class="ex-stats">{% for k,label in bands %}<a href="{{ filter_url(expiry_band=k, bucket='') }}" class="ex-{{ k }}" aria-current="{{ 'true' if k in selected_bands else 'false' }}"><span>{{ label }}</span><b>{{ band_stats[k].quantity|qty }} <small>EA</small></b><small>{{ band_stats[k].lots|length }} LOT</small></a>{% endfor %}</div>
  <p class="ex-note">현재 조회: {{ board.product_count }} 제품군 · {{ board.row_count }}행 · 양수 EA 재고 {{ board.total|qty }} EA. 기간 구간은 서로 중복되지 않습니다. 오늘까지 사용기한인 재고는 ‘오늘 만료’로 표시합니다.{% if board.excluded_count %}<br>음수·0·EA 외 단위 {{ board.excluded_count }}행은 상세표에는 유지하고 상단 EA 합계에서만 제외했습니다.{% endif %}</p>
  <div class="ex-tools"><div>LOT와 날짜를 확인하고, ‘근거·위치’에서 원래 품번·창고·날짜 계산근거를 확인할 수 있습니다.</div><div><button type="button" data-ex-open>전체 펼치기</button> <button type="button" data-ex-close>전체 접기</button> <a href="{{ url_for('expiry.special_rules') }}">특이사항 관리</a> <a href="{{ url_for('expiry.index') if request.endpoint=='expiry.dashboard_expiry' else url_for('expiry.dashboard_expiry') }}">{{ '유효기간 현황' if request.endpoint=='expiry.dashboard_expiry' else '유효기간 대시보드' }}</a></div></div>
  {% for section in board.sections %}
