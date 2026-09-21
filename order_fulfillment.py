@@ -133,17 +133,28 @@ def stock_index(stock, refs):
 
 
 def build_board(orders, quotes, stock, refs, saved, filters):
+    """Build one board from exactly one business document stream."""
+    scope = clean(filters.get('scope')) or 'overseas'
+    if scope not in {'overseas', 'consignment', 'domestic'}:
+        scope = 'overseas'
     query = clean(filters.get('q')).casefold()
-    trade = clean(filters.get('trade')).upper()
-    start = filters.get('start')
-    end = filters.get('end')
+    start, end = filters.get('start'), filters.get('end')
     stock_by_erp = stock_index(stock, refs)
     mapping = refs.get('mapping', {})
+    if scope == 'overseas':
+        sources = [row for row in quotes if clean(row.get('trade')) == '수출']
+        source_name, key_prefix = '해외 견적등록', 'export'
+    elif scope == 'consignment':
+        sources = [row for row in quotes if clean(row.get('trade')) == '국내'
+                   and '수탁' in (clean(row.get('note')) + ' ' + clean(row.get('detail')))]
+        source_name, key_prefix = '국내 수탁 견적등록', 'consignment'
+    else:
+        sources = [row for row in orders if clean(row.get('trade')).upper() == 'DOMESTIC']
+        source_name, key_prefix = '국내 주문등록', 'domestic'
+
     lines = []
-    for source in orders:
-        if start and source['date'] < start or end and source['date'] > end:
-            continue
-        if trade and source['trade'].upper() != trade:
+    for source in sources:
+        if (start and source['date'] < start) or (end and source['date'] > end):
             continue
         if query and query not in ' '.join(clean(source.get(k)) for k in ('document','customer','owner','erp','item_name','spec')).casefold():
             continue
@@ -155,46 +166,47 @@ def build_board(orders, quotes, stock, refs, saved, filters):
         shown = lookup(clean(mapped.get('icube')).upper(), row['item_name'], row['spec'], refs=refs)
         row['display_name'] = clean(shown.get('name') or row['item_name'])
         row['display_size'] = clean(shown.get('size') or row['spec'])
-        key = 'order|' + row['document'] + '|' + row['line']
-        progress = saved.get(key) if isinstance(saved.get(key), dict) else {}
-        row['prepared'] = number(progress.get('prepared'))
+        row['key'] = key_prefix + '|' + row['document'] + '|' + row['line']
+        progress = saved.get(row['key']) if isinstance(saved.get(row['key']), dict) else {}
+        row['prepared'] = number(progress.get('prepared')) if scope == 'overseas' else ZERO
         row['expected_date'] = clean(progress.get('expected_date'))
         row['note'] = clean(progress.get('note'))
-        row['status'] = clean(progress.get('status')) or ('재고 가능' if item_stock['finished'] + item_stock['waiting'] >= row['quantity'] else '재고 부족')
-        row['shortage'] = max(row['quantity'] - row['prepared'], ZERO)
-        row['key'] = key
+        if scope == 'overseas':
+            row['status'] = clean(progress.get('status')) or ('재고 가능' if item_stock['finished'] + item_stock['waiting'] >= row['quantity'] else '재고 부족')
+            row['shortage'] = max(row['quantity'] - row['prepared'], ZERO)
+        elif scope == 'consignment':
+            row['status'], row['shortage'] = '재고이동 자료 확인 필요', None
+        else:
+            row['status'], row['shortage'] = '출고·미납 자료 확인 필요', None
         lines.append(row)
-    lines.sort(key=lambda row: (row.get('ship_due') or row.get('due') or '9999', row['document'], natural(row['line'])))
-    groups = []
-    for row in lines:
-        if not groups or groups[-1]['document'] != row['document']:
-            groups.append({'document':row['document'],'date':row['date'],'customer':row['customer'],'trade':row['trade'],
-                           'owner':row['owner'],'due':row.get('ship_due') or row.get('due'),'rows':[],'quantity':ZERO,'prepared':ZERO,'shortage':ZERO})
-        group = groups[-1]
-        group['rows'].append(row)
-        for field in ('quantity','prepared','shortage'):
-            group[field] += row[field]
 
-    consignments = []
-    for source in quotes:
-        note = clean(source.get('note')) + ' ' + clean(source.get('detail'))
-        if source.get('trade') != '국내' or '수탁' not in note:
-            continue
-        if start and source['date'] < start or end and source['date'] > end:
-            continue
-        row = dict(source)
-        row['quantity'] = number(row['quantity'])
-        item_stock = stock_by_erp[row['erp']]
-        row.update(item_stock)
-        row['shortage'] = max(row['quantity'] - item_stock['consignment'], ZERO)
-        consignments.append(row)
-    consignments.sort(key=lambda row: (row['due'] or '9999', row['document'], natural(row['line'])))
-    return {'groups':groups,'lines':lines,'consignments':consignments,
-            'orders':len(groups),'quantity':sum((g['quantity'] for g in groups),ZERO),
+    lines.sort(key=lambda row: (row['customer'], row.get('ship_due') or row.get('due') or '9999', row['document'], natural(row['line'])))
+    grouped = {}
+    for row in lines:
+        due = row.get('ship_due') or row.get('due') or ''
+        group_key = (row['customer'], due)
+        if group_key not in grouped:
+            grouped[group_key] = {'customer':row['customer'],'due':due,'rows':[], 'documents':set(),
+                                  'owners':set(),'quantity':ZERO,'prepared':ZERO,'shortage':ZERO}
+        group = grouped[group_key]
+        group['rows'].append(row)
+        group['documents'].add(row['document'])
+        if row.get('owner'):
+            group['owners'].add(row['owner'])
+        group['quantity'] += row['quantity']
+        group['prepared'] += row['prepared']
+        if row['shortage'] is not None:
+            group['shortage'] += row['shortage']
+    groups = sorted(grouped.values(), key=lambda group: (group['due'] or '9999', group['customer']))
+    for group in groups:
+        group['documents'] = sorted(group['documents'])
+        group['owners'] = sorted(group['owners'])
+    return {'scope':scope,'source_name':source_name,'groups':groups,'lines':lines,
+            'customers':len({g['customer'] for g in groups}),'group_count':len(groups),
+            'documents':len({row['document'] for row in lines}),
+            'quantity':sum((g['quantity'] for g in groups),ZERO),
             'prepared':sum((g['prepared'] for g in groups),ZERO),
-            'shortage':sum((g['shortage'] for g in groups),ZERO),
-            'tt_orders':sum(g['trade'].upper()=='T/T' for g in groups),
-            'domestic_orders':sum(g['trade'].upper()=='DOMESTIC' for g in groups)}
+            'shortage':sum((g['shortage'] for g in groups),ZERO)}
 
 
 def install_order_fulfillment(app, db):
@@ -252,11 +264,18 @@ def install_order_fulfillment(app, db):
                 return redirect(url_for('expiry.order_fulfillment'))
             if action == 'progress':
                 key = clean(request.form.get('key'))
-                if not key.startswith('order|'):
+                if not key.startswith('export|'):
                     abort(400)
-                prepared = number(request.form.get('prepared'))
+                try:
+                    prepared = number(request.form.get('prepared'))
+                except ValueError as error:
+                    flash(str(error), 'error')
+                    return redirect(request.referrer or url_for('expiry.order_fulfillment'))
                 status = clean(request.form.get('status'))
-                if prepared < 0 or status not in {'신규','재고 확인','재고 부족','생산 대기','일부 준비','준비완료','출하 승인','출하완료'}:
+                if prepared < 0 or prepared != prepared.to_integral_value():
+                    flash('준비수량은 EA 기준 정수로 입력해 주세요.', 'error')
+                    return redirect(request.referrer or url_for('expiry.order_fulfillment'))
+                if status not in {'신규','재고 확인','재고 부족','생산 대기','일부 준비','준비완료','출하 승인','출하완료'}:
                     abort(400)
                 db.session.execute(text('SELECT pg_advisory_xact_lock(73190426)'))
                 row = db.session.scalar(select(Reference).where(Reference.kind=='order_progress',Reference.key==key))
@@ -270,13 +289,15 @@ def install_order_fulfillment(app, db):
             abort(400)
         orders, order_import = source('sales_order')
         quotes, quote_import = source('quote_register')
-        latest_date = max(date.fromisoformat(row['date']) for row in orders)
+        scope = clean(request.args.get('scope')) or 'overseas'
+        relevant = quotes if scope in {'overseas','consignment'} else orders
+        latest_date = max(date.fromisoformat(row['date']) for row in relevant)
         start = clean(request.args.get('start')) or latest_date.replace(day=1).isoformat()
         end = clean(request.args.get('end')) or latest_date.isoformat()
         all_refs = refs()
         progress = all_refs.get('order_progress', {})
         board = build_board(orders, quotes, latest('stock'), all_refs, progress,
-                            {'q':request.args.get('q'),'trade':request.args.get('trade'),'start':start,'end':end})
+                            {'q':request.args.get('q'),'scope':scope,'start':start,'end':end})
         return render_template('order_fulfillment.html',board=board,start=start,end=end,
             order_import=order_import,quote_import=quote_import,can_edit=current_user.role in {'admin','editor'})
 
