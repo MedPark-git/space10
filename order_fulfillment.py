@@ -296,6 +296,23 @@ def apply_consignment_movements(rows, movements):
                         fulfilled_stack.append((target, used-restored))
 
 
+def allocate_waiting_stock(rows, stock_by_erp):
+    """Allocate current shipment-waiting stock to oldest open export quotes by ERP."""
+    by_erp = defaultdict(list)
+    for row in rows:
+        row['prepared'] = ZERO
+        if row.get('remaining', ZERO) > 0:
+            by_erp[row['erp']].append(row)
+    for erp, demands in by_erp.items():
+        waiting = stock_by_erp[erp]['waiting']
+        for row in sorted(demands, key=lambda item:(item['date'], item['document'], natural(item['line']))):
+            if waiting <= 0:
+                break
+            allocated = min(waiting, row['remaining'])
+            row['prepared'] = allocated
+            waiting -= allocated
+
+
 def build_board(orders, quotes, shipments, movements, stock, refs, saved, filters):
     """Build one board from exactly one business document stream."""
     scope = clean(filters.get('scope')) or 'overseas'
@@ -328,7 +345,7 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
         row['display_size'] = clean(shown.get('size') or row['spec'])
         row['key'] = key_prefix + '|' + row['document'] + '|' + row['line']
         progress = saved.get(row['key']) if isinstance(saved.get(row['key']), dict) else {}
-        row['prepared'] = number(progress.get('prepared')) if scope == 'overseas' else ZERO
+        row['prepared'] = ZERO
         row['expected_date'] = clean(progress.get('expected_date'))
         row['note'] = clean(progress.get('note'))
         row['status'] = clean(progress.get('status'))
@@ -350,6 +367,8 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
             completed = min(number(FULFILLED.get(row['key'])), row['quantity'])
             row['fulfilled'] = completed
             row['remaining'] = row['quantity'] - completed
+    if scope == 'overseas':
+        allocate_waiting_stock(lines, stock_by_erp)
     visible = []
     for row in lines:
         if (start and row['date'] < start) or (end and row['date'] > end):
@@ -359,8 +378,9 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
         if row['remaining'] <= 0:
             continue
         if scope == 'overseas':
-            row['status'] = clean(row.get('status')) or ('재고 가능' if row['finished'] + row['waiting'] >= row['remaining'] else '재고 부족')
             row['shortage'] = max(row['remaining'] - row['prepared'], ZERO)
+            row['status'] = ('준비완료' if row['shortage'] <= 0 else
+                             '일부 준비' if row['prepared'] > 0 else '준비중')
         elif scope == 'domestic':
             row['status'], row['shortage'] = '미출고 잔량', None
         visible.append(row)
@@ -453,23 +473,12 @@ def install_order_fulfillment(app, db):
                 key = clean(request.form.get('key'))
                 if not key.startswith('export|'):
                     abort(400)
-                try:
-                    prepared = number(request.form.get('prepared'))
-                except ValueError as error:
-                    flash(str(error), 'error')
-                    return redirect(request.referrer or url_for('expiry.order_fulfillment'))
-                status = clean(request.form.get('status'))
-                if prepared < 0 or prepared != prepared.to_integral_value():
-                    flash('준비수량은 EA 기준 정수로 입력해 주세요.', 'error')
-                    return redirect(request.referrer or url_for('expiry.order_fulfillment'))
-                if status not in {'신규','재고 확인','재고 부족','생산 대기','일부 준비','준비완료','출하 승인','출하완료'}:
-                    abort(400)
                 db.session.execute(text('SELECT pg_advisory_xact_lock(73190426)'))
                 row = db.session.scalar(select(Reference).where(Reference.kind=='order_progress',Reference.key==key))
                 if row is None:
                     row=Reference(kind='order_progress',key=key);db.session.add(row)
-                row.payload={'prepared':str(prepared),'expected_date':clean(request.form.get('expected_date')),
-                             'status':status,'note':clean(request.form.get('note'))}
+                row.payload={'expected_date':clean(request.form.get('expected_date')),
+                             'note':clean(request.form.get('note'))}
                 row.updated_by=current_user.id;row.updated_at=datetime.now(timezone.utc)
                 db.session.commit();flash('준비현황을 저장했습니다.','success')
                 return redirect(url_for('expiry.order_fulfillment'))
