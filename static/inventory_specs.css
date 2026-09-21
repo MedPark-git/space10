@@ -295,3 +295,58 @@
   .iv-capture-page .iv-factory-heading{padding:4px 7px}
   .iv-capture-page .iv-factory,.iv-capture-page .iv-capture-summary{break-inside:avoid}
 }
+
+
+/* 2026-09-21 v06: retain product category type and specification in capture output */
+.iv-capture-detail-table{table-layout:fixed!important}
+.iv-capture-detail-table .iv-cap-product{width:17%!important}
+.iv-capture-detail-table .iv-cap-category{width:9%!important}
+.iv-capture-detail-table .iv-cap-type{width:13%!important}
+.iv-capture-detail-table .iv-cap-spec{width:12%!important}
+.iv-capture-detail-table th,
+.iv-capture-detail-table td{
+  height:24px;
+  padding:3px 4px;
+  font-size:.57rem;
+  line-height:1.08;
+  overflow-wrap:anywhere;
+}
+.iv-capture-detail-table thead th{height:29px;font-size:.54rem}
+.iv-capture-detail-table tbody .iv-cap-product{
+  vertical-align:middle;
+  text-align:left;
+  background:#eaf1f6;
+  color:#103e5d;
+  font-size:.70rem;
+  font-weight:900;
+  white-space:normal;
+}
+.iv-capture-detail-table tbody .iv-cap-category{
+  vertical-align:middle;
+  text-align:center;
+  background:#f0f4f7;
+  color:#284f69;
+  font-size:.60rem;
+  font-weight:900;
+  white-space:normal;
+}
+.iv-capture-detail-table tbody .iv-cap-type,
+.iv-capture-detail-table tbody .iv-cap-spec{
+  text-align:left;
+  white-space:normal;
+  color:#294a60;
+}
+.iv-capture-detail-table tbody .iv-cap-spec{font-weight:800;color:#173f5c}
+.iv-capture-detail-table tbody tr:nth-child(even) td{box-shadow:inset 0 0 0 9999px rgba(31,78,108,.018)}
+@media(max-width:900px){
+  .iv-capture-detail-table th,.iv-capture-detail-table td{font-size:.52rem;padding:3px 2px}
+  .iv-capture-detail-table tbody .iv-cap-product{font-size:.62rem}
+}
+@media print{
+  .iv-capture-detail-table th,.iv-capture-detail-table td{height:18px;padding:1.5px 3px;font-size:6.5pt}
+  .iv-capture-detail-table thead th{font-size:6.3pt}
+  .iv-capture-detail-table tbody .iv-cap-product{font-size:7.5pt}
+  .iv-capture-detail-table tbody .iv-cap-category{font-size:7pt}
+  .iv-capture-detail-table tr{break-inside:avoid}
+  .iv-capture-page .iv-factory,.iv-capture-page .iv-capture-summary{break-inside:auto}
+}
