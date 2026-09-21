@@ -176,3 +176,122 @@
   .iv-product-summary{align-items:flex-start!important}
   .iv-product-name h3{font-size:.94rem!important}
 }
+
+
+/* 2026-09-21 v05: factory capture and print mode */
+.iv-capture-toolbar,.iv-capture-summary{display:none}
+.iv-capture-link{background:#173f60!important;color:#fff!important;border-color:#173f60!important}
+.iv-capture-page{background:#e8eef2}
+.iv-capture-page .sidebar,
+.iv-capture-page .app>header{display:none!important}
+.iv-capture-page .app{margin-left:0!important;min-height:0}
+.iv-capture-page main{max-width:none!important;padding:10px 12px!important}
+.iv-capture-page .ivdash{
+  width:min(1280px,100%);
+  margin:0 auto;
+  gap:7px;
+}
+.iv-capture-page .iv-hero,
+.iv-capture-page .iv-filters,
+.iv-capture-page .iv-kpis,
+.iv-capture-page .iv-meta,
+.iv-capture-page .iv-detail-tools,
+.iv-capture-page .iv-footnote,
+.iv-capture-page .iv-product-card{display:none!important}
+.iv-capture-page .iv-capture-toolbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:16px;
+  padding:10px 14px;
+  border:1px solid #bfcfd9;
+  border-radius:8px;
+  background:#fff;
+}
+.iv-capture-toolbar p{margin:0 0 1px;font-size:.52rem;letter-spacing:.1em;color:#6d8190;font-weight:800}
+.iv-capture-toolbar h1{margin:0;font-size:1.15rem;line-height:1.15;color:#123f5f}
+.iv-capture-toolbar span{display:block;margin-top:2px;font-size:.58rem;color:#647b8c}
+.iv-capture-actions{display:flex;gap:5px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.iv-capture-actions a,.iv-capture-actions button{
+  border:1px solid #bdccd6;
+  border-radius:6px;
+  padding:6px 8px;
+  background:#fff;
+  color:#244f6c;
+  font-size:.58rem;
+  font-weight:800;
+  cursor:pointer;
+}
+.iv-capture-page .iv-factory{gap:5px}
+.iv-capture-page .iv-factory-heading{
+  padding:7px 10px;
+  border-radius:7px;
+  border-left-width:4px;
+}
+.iv-capture-page .iv-factory-heading h2{font-size:.83rem}
+.iv-capture-page .iv-factory-heading p{font-size:.5rem}
+.iv-capture-page .iv-factory-heading>strong{font-size:.8rem}
+.iv-capture-page .iv-capture-summary{
+  display:block;
+  overflow:hidden;
+  border:1px solid #bfcdd7;
+  border-radius:7px;
+  background:#fff;
+}
+.iv-capture-summary table{
+  width:100%;
+  min-width:0;
+  table-layout:fixed;
+  border-collapse:collapse;
+}
+.iv-capture-summary th,.iv-capture-summary td{
+  height:29px;
+  padding:4px 7px;
+  border-right:1px solid #cbd6de;
+  border-bottom:1px solid #cbd6de;
+  text-align:center;
+  white-space:nowrap;
+  font-size:.66rem;
+  font-variant-numeric:tabular-nums;
+}
+.iv-capture-summary tr>*:last-child{border-right:0}
+.iv-capture-summary tbody tr:last-child>*{border-bottom:0}
+.iv-capture-summary thead th{
+  height:31px;
+  background:#dfe9ef;
+  color:#294f69;
+  font-size:.59rem;
+  font-weight:900;
+}
+.iv-capture-summary thead th:first-child{width:31%;text-align:left}
+.iv-capture-summary tbody th{
+  text-align:left;
+  background:#f8fafb;
+  color:#123f5e;
+  font-size:.78rem;
+  font-weight:900;
+}
+.iv-capture-summary thead small{display:block;font-size:.43rem;margin-top:-1px}
+.iv-capture-summary .iv-capture-available{background:#e4f3ed;color:#126b55}
+.iv-capture-summary .iv-capture-total{background:#e8f1f7;color:#174d72}
+@media(max-width:760px){
+  .iv-capture-page main{padding:6px!important}
+  .iv-capture-page .iv-capture-toolbar{align-items:flex-start;flex-direction:column}
+  .iv-capture-actions{justify-content:flex-start}
+  .iv-capture-summary th,.iv-capture-summary td{padding:3px 4px;font-size:.58rem}
+  .iv-capture-summary tbody th{font-size:.67rem}
+  .iv-capture-summary thead th:first-child{width:27%}
+}
+@media print{
+  @page{size:A4 landscape;margin:7mm}
+  body.iv-capture-page{background:#fff!important}
+  .iv-capture-page main{padding:0!important}
+  .iv-capture-page .ivdash{width:100%;max-width:none}
+  .iv-capture-actions{display:none!important}
+  .iv-capture-page .iv-capture-toolbar{padding:5px 7px;border-color:#8ea4b3}
+  .iv-capture-toolbar h1{font-size:13pt}
+  .iv-capture-summary th,.iv-capture-summary td{height:22px;padding:2px 5px;font-size:7.5pt}
+  .iv-capture-summary tbody th{font-size:8.5pt}
+  .iv-capture-page .iv-factory-heading{padding:4px 7px}
+  .iv-capture-page .iv-factory,.iv-capture-page .iv-capture-summary{break-inside:avoid}
+}
