@@ -81,6 +81,13 @@ def build_expiry_board(rows, refs, factory=''):
 
 def render_expiry_display(current_view):
     refs, snapshot, as_of, summary, warehouses, statuses, rows = current_view()
+    locations = summary.get('filter_locations', [])
+    selected_warehouses = [value for value in request.args.getlist('warehouse') if value]
+    selected_location_tokens = [value for value in request.args.getlist('location') if value]
+    selected_locations = [
+        '' if value == '__unassigned__' else value
+        for value in selected_location_tokens
+    ]
     selected_factory = request.args.get('product_factory','')
     if selected_factory not in FACTORIES:
         selected_factory = ''
@@ -96,7 +103,8 @@ def render_expiry_display(current_view):
         params.update(changes)
         return url_for(request.endpoint, **params)
     return render_template('expiry_display.html', board=board, snapshot=snapshot, as_of=as_of,
-        warehouses=warehouses,statuses=statuses,bands=BANDS,band_stats=all_board['stats'],
+        warehouses=warehouses,locations=locations,statuses=statuses,bands=BANDS,band_stats=all_board['stats'],
+        selected_warehouses=selected_warehouses,selected_locations=selected_locations,
         selected_bands=selected_bands,factories=FACTORIES,
         selected_factory=selected_factory,filter_url=filter_url,scope=summary.get('scope',{}),
         export_url=url_for('expiry.export', **request.args.to_dict(flat=False)))
