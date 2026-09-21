@@ -9,7 +9,7 @@ from sqlalchemy import select
 from expiry_engine import calculate, family_rules, index_mts, number, stock_scope
 from product_display_master import lookup as product_display_lookup
 from product_display_admin import install_product_display_admin
-from shipment_analysis import install_shipment_analysis
+from shipment_analysis import install_shipment_analysis, shipment_average_index
 
 
 def make_inventory_dashboard_view(app, db):
@@ -149,6 +149,13 @@ def make_inventory_dashboard_view(app, db):
             selected_availability = ""
         query = request.args.get("q", "").strip().casefold()
         show_value = request.args.get("show_value") == "1"
+        try:
+            shipment_period = int(request.args.get("shipment_period", 6))
+        except ValueError:
+            shipment_period = 6
+        if shipment_period not in {3, 6, 12}:
+            shipment_period = 6
+        shipment_averages, shipment_meta = shipment_average_index(app, db, shipment_period)
         costs = build_cost_index(refs) if show_value else {}
 
         filtered = []
@@ -190,6 +197,7 @@ def make_inventory_dashboard_view(app, db):
             else:
                 row["unit_cost"] = None
             row["stock_value"] = number(row["quantity"]) * row["unit_cost"] if row["unit_cost"] is not None else None
+            row["monthly_shipment"] = shipment_averages.get(str(row.get("erp") or "").strip(), number(0))
             filtered.append(row)
 
         groups = {}
@@ -218,6 +226,8 @@ def make_inventory_dashboard_view(app, db):
                 "other_value": number(0),
                 "unusable_value": number(0),
                 "value_incomplete": False,
+                "monthly_shipment": number(0),
+                "shipment_erps": set(),
             })
             group["factories"].add(row["product_factory"])
             group["total"] += qty
@@ -242,6 +252,10 @@ def make_inventory_dashboard_view(app, db):
                     group["available_value"] += row["stock_value"]
             if row["location_exception"]:
                 group["location_exception"] += qty
+            erp_code = str(row.get("erp") or "").strip()
+            if erp_code and erp_code not in group["shipment_erps"]:
+                group["monthly_shipment"] += row["monthly_shipment"]
+                group["shipment_erps"].add(erp_code)
 
             key = (row["display_category"], row["display_type"], row["display_size"])
             line = group["rows"].setdefault(key, {
@@ -259,6 +273,8 @@ def make_inventory_dashboard_view(app, db):
                 "total": number(0),
                 "value": number(0),
                 "value_incomplete": False,
+                "monthly_shipment": number(0),
+                "shipment_erps": set(),
             })
             line["total"] += qty
             if row["stock_value"] is None:
@@ -274,14 +290,22 @@ def make_inventory_dashboard_view(app, db):
                 line[bucket] += qty
             if row["location_exception"]:
                 line["location_exception"] += qty
+            if erp_code and erp_code not in line["shipment_erps"]:
+                line["monthly_shipment"] += row["monthly_shipment"]
+                line["shipment_erps"].add(erp_code)
 
         order12 = {name: i for i, name in enumerate(product_order(refs, "12"))}
         order3 = {name: i for i, name in enumerate(product_order(refs, "3"))}
         product_groups = []
 
         for group in groups.values():
+            group.pop("shipment_erps", None)
             group["rows"] = list(group["rows"].values())
+            for line in group["rows"]:
+                line.pop("shipment_erps", None)
+                line["coverage_months"] = line["available"] / line["monthly_shipment"] if line["monthly_shipment"] > 0 else None
             group["rows"].sort(key=lambda r: (natural_key(r["category"]), natural_key(r["type"]), natural_key(r["size"])))
+            group["coverage_months"] = group["available"] / group["monthly_shipment"] if group["monthly_shipment"] > 0 else None
             factories = group.pop("factories")
             if factories == {"3"}:
                 group["factory_key"] = "3"
@@ -328,6 +352,8 @@ def make_inventory_dashboard_view(app, db):
                 "other_value": group["other_value"],
                 "unusable_value": group["unusable_value"],
                 "value_incomplete": group["value_incomplete"],
+                "monthly_shipment": group["monthly_shipment"],
+                "coverage_months": group["coverage_months"],
             }
 
         warehouses = sorted({row.get("warehouse") or "미지정" for row in rows})
@@ -339,6 +365,8 @@ def make_inventory_dashboard_view(app, db):
         available_value = sum((g["available_value"] for g in product_groups), number(0))
         other_value = sum((g["other_value"] for g in product_groups), number(0))
         unusable_value = sum((g["unusable_value"] for g in product_groups), number(0))
+        monthly_shipment = sum((g["monthly_shipment"] for g in product_groups if g["monthly_shipment"] > 0), number(0))
+        coverage_months = available / monthly_shipment if monthly_shipment > 0 else None
 
         dashboard = {
             "snapshot": snapshot,
@@ -349,6 +377,7 @@ def make_inventory_dashboard_view(app, db):
                 "availability": selected_availability,
                 "product_factory": selected_factory,
                 "show_value": show_value,
+                "shipment_period": shipment_period,
             },
             "availability_labels": {
                 "available": "가용재고",
@@ -376,7 +405,10 @@ def make_inventory_dashboard_view(app, db):
                 "master_unmapped": len({row.get("icube") or row.get("erp") for row in filtered if not row.get("display_mapped")}),
                 "missing_cost": len(missing_cost),
                 "location_exception": sum((g["location_exception"] for g in product_groups), number(0)),
+                "monthly_shipment": monthly_shipment,
+                "coverage_months": coverage_months,
             },
+            "shipment": shipment_meta,
         }
         return render_template("inventory_dashboard.html", dashboard=dashboard)
 
