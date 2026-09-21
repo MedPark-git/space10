@@ -16,6 +16,14 @@ def expiry_band(row):
             return key
     return 'safe'
 
+def unit_totals(rows):
+    """Keep unlike units separate in every displayed subtotal."""
+    result = {}
+    for row in rows:
+        unit = clean(row.get('unit')).upper() or '단위 미등록'
+        result[unit] = result.get(unit, Decimal('0')) + Decimal(str(row.get('quantity') or 0))
+    return [dict(unit=unit, quantity=quantity) for unit, quantity in sorted(result.items())]
+
 def build_expiry_board(rows, refs, factory=''):
     sections = {}
     stats = {key: dict(quantity=Decimal('0'), lots=set()) for key, _ in BANDS}
@@ -61,8 +69,11 @@ def build_expiry_board(rows, refs, factory=''):
             groups.sort(key=lambda g:({'국내':0,'CE':1,'일반수출':2}.get(g['category'],3),natural(g['category']),natural(g['type'])))
             for group in groups:
                 group['rows'].sort(key=lambda r:(natural(r['display_size']), r.get('expiry') or '9999', clean(r.get('lot'))))
+                group['totals'] = unit_totals(group['rows'])
             product['groups'] = groups
+            product['totals'] = unit_totals(product['rows'])
         section['products'] = products
+        section['totals'] = unit_totals([row for product in products for row in product['rows']])
         ordered.append(section)
     return dict(sections=ordered,stats=stats,total=sum(s['quantity'] for s in stats.values()),
                 row_count=row_count,excluded_count=excluded_count,
