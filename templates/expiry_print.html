@@ -19,7 +19,7 @@ body.ep-mode{background:#e7edf2}body.ep-mode .sidebar,body.ep-mode .app>header{d
  <a href="{{ filter_url(capture='', product_factory=selected_factory) }}">일반 유효기간 화면</a>
  <span class="ep-status" id="ep-status" role="status">제품 · 국내/CE · 타입 · 규격 · LOT · 유효기간과 소계를 배치합니다.</span>
 </div>
-<div class="ep-report" data-release="expiry-print-20260921-11">
+<div class="ep-report" data-release="expiry-print-20260921-12">
 {% if detail_mode %}
 {% for section in board.sections %}
  <div class="ep-source" data-factory="{{ section.label }}" data-stock-date="{{ snapshot.as_of if snapshot else '-' }}" data-asof="{{ as_of }}" data-filter="창고: {{ selected_warehouses|join(', ') if selected_warehouses else '전체' }} · 장소: {% if selected_locations %}{% for loc in selected_locations %}{{ loc or '장소 미지정' }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}전체{% endif %}" data-products="{{ section.products|length }}" data-total="{% for t in section.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %} / {% endif %}{% endfor %}">
@@ -39,17 +39,17 @@ body.ep-mode{background:#e7edf2}body.ep-mode .sidebar,body.ep-mode .app>header{d
 {% else %}
 {% for section in location_board.sections %}
  <div class="ep-source" data-factory="{{ section.label }}" data-stock-date="{{ snapshot.as_of if snapshot else '-' }}" data-asof="{{ as_of }}" data-filter="창고: {{ selected_warehouses|join(', ') if selected_warehouses else '전체' }} · 장소: {% if selected_locations %}{% for loc in selected_locations %}{{ loc or '장소 미지정' }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}전체{% endif %}" data-total="{% for t in section.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %} / {% endif %}{% endfor %}{% if 'amount' in selected_columns %} · {{ '{:,.0f}'.format(section.amount) }}원{% if section.missing_cost %}*{% endif %}{% endif %}">
- {% for band in section.bands %}{% set band_state=namespace(shown=false) %}{% for place in band.groups %}{% for chunk in place.rows|batch(14) %}
+ {% for band in section.bands %}{% set band_state=namespace(shown=false) %}{% for place in band.groups %}{% for family in place.families %}{% for chunk in family.rows|batch(14) %}
   <article class="ep-block">
    {% if not band_state.shown %}<div class="ep-band-label ep-{{ band.key }}"><span>{{ band.label }}</span><span>{% for t in band.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %} / {% endif %}{% endfor %}{% if 'amount' in selected_columns %} · {{ '{:,.0f}'.format(band.amount) }}원{% if band.missing_cost %}*{% endif %}{% endif %}</span></div>{% set band_state.shown=true %}{% endif %}
-   <div class="ep-axis-label">{{ place.label }}{% if not loop.first %} · 계속{% endif %}</div>
+   <div class="ep-axis-label">{{ place.label }} · <b>{{ family.label }}</b>{% if not loop.first %} · 계속{% endif %}</div>
    <table class="ep-summary"><colgroup><col class="ep-product"><col class="ep-summary-spec"><col class="ep-summary-qty">{% if 'amount' in selected_columns %}<col class="ep-money">{% endif %}{% if 'expiry' in selected_columns %}<col class="ep-summary-date"><col class="ep-summary-days">{% endif %}</colgroup>
     <thead><tr><th>제품</th><th>규격</th><th>수량</th>{% if 'amount' in selected_columns %}<th>금액</th>{% endif %}{% if 'expiry' in selected_columns %}<th>최단 유효기간</th><th>잔여일</th>{% endif %}</tr></thead>
     <tbody>{% for r in chunk %}<tr><td>{{ r.name }}</td><td>{{ r.size }}</td><td>{% for t in r.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>{% if 'amount' in selected_columns %}<td class="ep-money-cell">{{ '{:,.0f}'.format(r.amount) }}원{% if r.missing_cost %}<br><span class="ep-missing">원가 미등록 포함</span>{% endif %}</td>{% endif %}{% if 'expiry' in selected_columns %}<td class="ep-{{ r.earliest_band }}">{{ r.earliest or '확인 필요' }}</td><td class="ep-{{ r.earliest_band }}">{% if r.earliest_remaining is none %}확인 필요{% elif r.earliest_remaining==0 %}오늘 만료{% elif r.earliest_remaining<0 %}{{ -r.earliest_remaining }}일 경과{% else %}{{ r.earliest_remaining }}일{% endif %}</td>{% endif %}</tr>{% endfor %}</tbody>
-    {% if loop.first %}<tfoot><tr><th colspan="2">{{ place.label }} 소계</th><td>{% for t in place.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>{% if 'amount' in selected_columns %}<td class="ep-money-cell">{{ '{:,.0f}'.format(place.amount) }}원{% if place.missing_cost %}*{% endif %}</td>{% endif %}{% if 'expiry' in selected_columns %}<td colspan="2"></td>{% endif %}</tr></tfoot>{% endif %}
+    {% if loop.first %}<tfoot><tr><th colspan="2">{{ family.label }} 소계</th><td>{% for t in family.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>{% if 'amount' in selected_columns %}<td class="ep-money-cell">{{ '{:,.0f}'.format(family.amount) }}원{% if family.missing_cost %}*{% endif %}</td>{% endif %}{% if 'expiry' in selected_columns %}<td colspan="2"></td>{% endif %}</tr></tfoot>{% endif %}
    </table>
   </article>
- {% endfor %}{% endfor %}{% endfor %}
+ {% endfor %}{% endfor %}{% endfor %}{% endfor %}
  </div>
 {% else %}<p>선택한 공장에 표시할 유효기간 재고가 없습니다.</p>{% endfor %}
 {% endif %}
