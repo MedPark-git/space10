@@ -23,6 +23,7 @@ body.ip-mode main {max-width:none;padding:12px!important}
 .ip-block h2 span {font-size:.85em;font-weight:800}
 .ip-block h2 small {font-size:.67em;font-weight:500}
 .ip-block .ip-product-metrics {margin-left:auto;text-align:right;font-size:.68em;font-weight:700;white-space:nowrap}
+.ip-family-label{display:flex;justify-content:space-between;gap:8px;margin:0 0 .4em;padding:.3em .5em;background:#d8e6ee;border:1px solid #93aab8;color:#173f5a;font-size:1.08em;font-weight:900;break-after:avoid}.ip-family-label span:last-child{font-size:.8em;text-align:right}
 .ip-block .ip-group {display:flex;gap:8px;align-items:center;background:#f4f7f9;padding:.2em .5em;border-bottom:1px solid #bccad4;font-size:1em;line-height:1.1}
 .ip-group .ip-type {font-weight:800;color:#174d70}
 .ip-group .ip-market {border-left:1px solid #aebfcb;padding-left:8px;font-weight:800}
@@ -58,17 +59,19 @@ body.ip-mode main {max-width:none;padding:12px!important}
  <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id) }}">일반 재고 화면</a>
  <span class="ip-status" id="ip-status" role="status">제품 · 국내/CE 구분 · 타입 · 규격별 수량을 빠짐없이 배치합니다.</span>
 </div>
-<div class="ip-report" data-release="inventory-print-20260921-08">
+<div class="ip-report" data-release="inventory-print-20260921-09">
  {% if board %}
  {% for section in board.sections %}
  <div class="ip-source" data-factory="{{ section.label }}" data-date="{{ board.snapshot_date }}" data-total="{{ section.total|iv_qty }}" data-available="{{ section.available|iv_qty }}" data-average="{{ '{:,.1f}'.format(section.monthly_shipment) }}" data-coverage="{{ '{:,.1f}'.format(section.coverage_months) if section.coverage_months is not none else '-' }}" data-value="{{ section.value|iv_won }}" data-period="{{ board.filters.shipment_period }}" data-count="{{ section.products|length }}" data-filter="{{ '검색: ' ~ board.filters.q if board.filters.q else '전체 제품' }} / {{ board.filters.warehouses|join(', ') if board.filters.warehouses else '전체 창고' }} / {{ board.filters.availability or '전체 재고구분' }}">
-  {% for g in section.products %}
+  {% for family in section.families %}
+   <article class="ip-family-label"><span>{{ family.label }}</span><span>가용 {{ family.available|iv_qty }} · 월평균 {{ '{:,.1f}'.format(family.monthly_shipment) }} · 보유 {{ '{:,.1f}'.format(family.coverage_months) if family.coverage_months is not none else '-' }}개월 · {{ family.value|iv_won }}원{% if family.missing_quantity %}*{% endif %}</span></article>
+  {% for g in family.products %}
    {% for typ, lines in g.rows|groupby('type') %}
     {% for c in g.categories %}
      {% set type_rows = c.rows|selectattr('type', 'equalto', typ)|list %}
      {% for chunk in type_rows|batch(16) %}
      <article class="ip-block">
-      <h2><span>{{ g.name }}{% if not loop.first %} <small>계속</small>{% endif %}</span><span class="ip-product-metrics">가용 {{ g.available|iv_qty }} · 월평균 {{ '{:,.1f}'.format(g.monthly_shipment) }} · 보유 {{ '{:,.1f}'.format(g.coverage_months) if g.coverage_months is not none else '-' }}개월 · {{ g.value|iv_won }}원{% if g.missing_quantity %}*{% endif %}</span></h2>
+      <h2><span>{{ g.name }}{% if not loop.first %} <small>계속</small>{% endif %} · {{ g.management_label }}</span><span class="ip-product-metrics">가용 {{ g.available|iv_qty }} · 월평균 {{ '{:,.1f}'.format(g.monthly_shipment) }} · 보유 {{ '{:,.1f}'.format(g.coverage_months) if g.coverage_months is not none else '-' }}개월 · {{ g.value|iv_won }}원{% if g.missing_quantity %}*{% endif %}</span></h2>
       <div class="ip-group"><span class="ip-type">{{ typ }}</span><span class="ip-market">{{ c.name }}</span></div>
       <table>
        <colgroup><col class="ip-size"><col><col><col><col><col><col><col><col><col class="ip-money"></colgroup>
@@ -81,6 +84,7 @@ body.ip-mode main {max-width:none;padding:12px!important}
      {% endfor %}
     {% endfor %}
    {% endfor %}
+  {% endfor %}
   {% endfor %}
  </div>
  {% endfor %}
