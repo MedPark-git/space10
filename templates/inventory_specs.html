@@ -16,9 +16,10 @@
 .iv-detail-table tfoot th,.iv-detail-table tfoot td{background:#dfeaf1;border-top:2px solid #7893a5;font-weight:900}
 .iv-kpis.iv-six{grid-template-columns:repeat(6,minmax(0,1fr))}.iv-shipment{border-top-color:#28788e!important}.iv-coverage-low{border-top-color:#c34642!important}.iv-coverage-mid{border-top-color:#d28a18!important}
 .iv-demand{font-variant-numeric:tabular-nums;font-weight:900}.iv-coverage{display:inline-block;min-width:56px;padding:4px 6px;border-radius:4px;background:#e7f3ec;color:#235f43;font-weight:900}.iv-coverage.low{background:#fff0f0;color:#a02d35}.iv-coverage.mid{background:#fff5dc;color:#875807}.iv-coverage.none{background:#eef1f3;color:#68737a}
-@media(max-width:1100px){.iv-kpis.iv-six{grid-template-columns:repeat(3,1fr)}}@media(max-width:700px){.iv-kpis.iv-six{grid-template-columns:repeat(2,1fr)}}
+.iv-action-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0}.iv-action{padding:10px;border:1px solid #c2d0d9;border-left:4px solid #54788d;border-radius:6px;background:#fff}.iv-action.critical{border-left-color:#bd323b}.iv-action.watch{border-left-color:#d18b1c}.iv-action.excess{border-left-color:#7661a5}.iv-action.data{border-left-color:#667984}.iv-action span{font-size:11px;color:#536976}.iv-action b{display:block;margin:3px 0;font-size:18px}.iv-action small{display:block;line-height:1.35;color:#667984}.iv-family{margin:12px 0 18px;border:2px solid #aec0cb;border-radius:7px;overflow:hidden;background:#f8fafb}.iv-family-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 11px;background:#dfeaf1;border-bottom:1px solid #afc1cc}.iv-family-head h3{margin:0;font-size:16px;color:#173f5a}.iv-family-head span{font-size:11px;text-align:right}.iv-family-body{padding:8px}.iv-management{display:inline-block;padding:3px 6px;border-radius:4px;background:#e8f3ed;color:#255d43;font-size:10px;font-weight:900}.iv-management.stockout,.iv-management.critical{background:#fff0f0;color:#a02d35}.iv-management.watch{background:#fff5dc;color:#875807}.iv-management.excess,.iv-management.no_demand{background:#f2edfa;color:#674c90}.iv-management.location{background:#fff1e5;color:#9b4e12}
+@media(max-width:1100px){.iv-kpis.iv-six{grid-template-columns:repeat(3,1fr)}.iv-action-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:700px){.iv-kpis.iv-six,.iv-action-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
-<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260921-07">
+<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260921-08">
   <header class="iv-hero">
     <div>
       <p class="iv-eyebrow">MEDPARK INVENTORY</p>
@@ -94,6 +95,14 @@
     <article class="iv-kpi iv-shipment {{ 'iv-coverage-low' if board.metrics.coverage_months is not none and board.metrics.coverage_months < 1 else 'iv-coverage-mid' if board.metrics.coverage_months is not none and board.metrics.coverage_months < 3 }}"><span>재고 보유개월</span><strong>{{ '{:,.1f}'.format(board.metrics.coverage_months) if board.metrics.coverage_months is not none else '-' }}<em>개월</em></strong><small>가용재고 ÷ 월평균 출고</small></article>
   </section>
 
+  <section class="iv-action-grid" aria-label="생산관리 확인사항">
+    {% set urgent = board.management.stockout|length + board.management.critical|length %}
+    <article class="iv-action critical"><span>즉시 확인</span><b>{{ urgent }}개 제품</b><small>가용재고 없음 또는 보유 1개월 미만{% if urgent %}<br>{% for p in (board.management.stockout + board.management.critical)[:3] %}{{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</small></article>
+    <article class="iv-action watch"><span>생산계획 확인</span><b>{{ board.management.watch|length }}개 제품</b><small>보유 1~3개월 구간{% if board.management.watch %}<br>{% for p in board.management.watch[:3] %}{{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</small></article>
+    <article class="iv-action excess"><span>과다·무출고 재고</span><b>{{ board.management.excess|length + board.management.no_demand|length }}개 제품</b><small>보유 12개월 초과 또는 출고이력 없음</small></article>
+    <article class="iv-action data"><span>위치·기준정보 확인</span><b>{{ board.management.location|length + board.missing_cost + board.unmapped }}건</b><small>공장 위치 예외 {{ board.management.location|length }} · 원가 {{ board.missing_cost }} · 품번분류 {{ board.unmapped }}</small></article>
+  </section>
+
   <div class="iv-meta">
     <span>{{ board.product_count }} 제품군</span>
     {% if board.unmapped %}<span class="iv-warning">품번 분류 미등록 {{ board.unmapped }}</span>{% endif %}
@@ -109,6 +118,8 @@
     <div>
       <button type="button" id="iv-expand">전체 펼치기</button>
       <button type="button" id="iv-collapse">전체 접기</button>
+      <a href="{{ url_for('expiry.dashboard_expiry') }}">유효기간 위험현황</a>
+      <a href="{{ url_for('expiry.order_fulfillment') }}">주문·미납현황</a>
       <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, capture='1') }}">1·2공장 캡처</a>
       <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, capture='1') }}">3공장 캡처</a>
       {% if can_edit %}
@@ -129,11 +140,13 @@
       <strong>{{ section.total|iv_qty }} <small>EA</small></strong>
     </div>
 
-    {% for g in section.products %}
+    {% for family in section.families %}
+    <section class="iv-family"><header class="iv-family-head"><h3>{{ family.label }}</h3><span>{{ family.products|length }}개 제품 · 가용 {{ family.available|iv_qty }} EA · 월평균 {{ '{:,.1f}'.format(family.monthly_shipment) }} · 보유 {{ '{:,.1f}'.format(family.coverage_months) if family.coverage_months is not none else '-' }}개월{% if board.filters.show_value %}<br>{{ family.value|iv_won }}원{% if family.missing_quantity %}*{% endif %}{% endif %}</span></header><div class="iv-family-body">
+    {% for g in family.products %}
     <details class="product-stock-group iv-product-card" data-iv-product id="{{ g.id }}" open>
       <summary class="iv-product-summary">
         <div class="iv-product-name">
-          <h3>{{ g.name }}</h3>
+          <h3>{{ g.name }} <span class="iv-management {{ g.management_key }}">{{ g.management_label }}</span></h3>
           <span>{{ g.categories|length }}개 구분 · {{ g.rows|length }}개 규격행</span>
         </div>
         <div class="iv-product-totals">
@@ -217,6 +230,8 @@
         {% endfor %}
       </div>
     </details>
+    {% endfor %}
+    </div></section>
     {% endfor %}
   </section>
   {% endfor %}
