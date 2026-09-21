@@ -97,3 +97,82 @@
   .iv-category-totals{justify-content:flex-start}
   .iv-manage-table{min-width:860px}
 }
+
+
+/* 2026-09-21 v04: compact capture layout and explicit available-stock total */
+.iv-product-summary{
+  padding:8px 12px!important;
+  align-items:center!important;
+  text-align:left!important;
+  min-height:42px;
+}
+.iv-product-name{
+  flex:1 1 240px;
+  text-align:left!important;
+  gap:1px;
+}
+.iv-product-name h3{
+  margin:0!important;
+  font-size:1.02rem!important;
+  line-height:1.15;
+  font-weight:900!important;
+  letter-spacing:-.015em;
+  color:#103c5b!important;
+}
+.iv-product-name span{font-size:.51rem!important}
+.iv-product-totals{gap:4px}
+.iv-mini{padding:3px 6px;font-size:.52rem;border:1px solid rgba(59,91,112,.12)}
+.iv-mini b{font-size:.63rem}
+.iv-mini small{font-size:.45rem;opacity:.78}
+.iv-category-stack{gap:6px;padding:8px}
+.iv-category-bar{padding:6px 9px}
+.iv-category-label{padding:3px 7px;font-size:.62rem}
+.iv-category-totals{gap:3px}
+.iv-category-totals span{padding:2px 5px;font-size:.5rem}
+.iv-manage-table{
+  border-collapse:separate;
+  border-spacing:0;
+  border-top:1px solid #c8d5de;
+  border-left:1px solid #c8d5de;
+}
+.iv-manage-table thead th{
+  padding:5px 6px!important;
+  border-right:1px solid #c8d5de!important;
+  border-bottom:1px solid #b9c9d4!important;
+  line-height:1.15;
+}
+.iv-manage-table thead th small{
+  display:block;
+  margin-top:1px;
+  font-size:.46rem;
+  font-weight:700;
+  opacity:.78;
+}
+.iv-manage-table tbody td,
+.iv-manage-table tbody th{
+  padding:4px 6px!important;
+  border-right:1px solid #d3dde4!important;
+  border-bottom:1px solid #cfd9e1!important;
+  line-height:1.12;
+}
+.iv-detail-table tbody tr.iv-spec-row{height:38px}
+.iv-manage-table .iv-type{font-size:.61rem;line-height:1.15}
+.iv-manage-table .iv-spec>strong{font-size:.69rem}
+.iv-qty-cell{padding:4px 5px!important}
+.iv-manage-table .iv-qty-cell>b{font-size:.80rem;line-height:1}
+.iv-qty-cell>small{margin-top:1px!important;font-size:.44rem!important}
+.iv-available-total{
+  background:#e3f3ed!important;
+  color:#116c55!important;
+  font-weight:900;
+}
+.iv-available-total>b{font-size:.86rem!important}
+.iv-available-head{background:#dcefe8!important;color:#17654f!important}
+.iv-places{margin-top:2px}
+.iv-places>summary{font-size:.49rem}
+.iv-kpi-formula{display:block;margin-top:-1px;font-size:.52rem;color:#638174}
+.iv-footnote{border-top:1px solid #d7e1e8}
+@media(max-width:900px){
+  .iv-product-summary{align-items:flex-start!important}
+  .iv-product-name h3{font-size:.94rem!important}
+}
