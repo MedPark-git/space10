@@ -333,6 +333,8 @@ def install_inventory_spec_view(app, db):
     app.jinja_env.filters['iv_won'] = won_filter
     from product_order_admin import install_product_order_admin
     install_product_order_admin(app, db)
+    from order_fulfillment import install_order_fulfillment
+    install_order_fulfillment(app, db)
 
     @login_required
     def inventory_spec_dashboard():
