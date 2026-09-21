@@ -485,7 +485,10 @@ def install_order_fulfillment(app, db):
 
     def refs():
         result = {}
-        for row in db.session.scalars(select(Reference).order_by(Reference.kind, Reference.key)):
+        needed = ('mapping', 'product_factory', 'rules', 'warehouse_classes',
+                  'product_order', 'product_display', 'order_progress')
+        for row in db.session.scalars(select(Reference).where(
+                Reference.kind.in_(needed)).order_by(Reference.kind, Reference.key)):
             result.setdefault(row.kind, {})[row.key] = row.payload
         return result
 
