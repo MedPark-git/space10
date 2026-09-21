@@ -143,34 +143,21 @@ def stock_bucket(raw, factory, refs):
 
 
 def cost_index(refs, target_month):
-    result = {}
-    for payload in refs.get('unit_cost', {}).values():
-        if not isinstance(payload, dict):
-            continue
-        code = clean(payload.get('icube')).upper()
-        month = clean(payload.get('month'))
-        if not code or not re.fullmatch(r'\d{4}-\d{2}', month) or month > target_month:
-            continue
-        try:
-            cost = num(payload.get('cost'))
-        except ValueError:
-            continue
-        if cost < 0:
-            continue
-        if code not in result or month > result[code][0]:
-            result[code] = (month, cost)
-    return result
+    from unit_cost_admin import cost_index_with_seed
+    return cost_index_with_seed(refs, target_month)
 
 
 def category_key(value):
     return ({'국내': 0, '일반수출': 1}.get(value, 2), natural(value))
 
 
-def build_board(entries, refs, filters, snapshot_date):
+def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
+    shipment_averages = shipment_averages or {}
     selected = dict(q=clean(filters.get('q')), warehouses=list(filters.get('warehouses') or []),
                     product_factory=clean(filters.get('product_factory')),
                     availability=clean(filters.get('availability')),
-                    show_value=bool(filters.get('show_value')))
+                    show_value=bool(filters.get('show_value')),
+                    shipment_period=int(filters.get('shipment_period') or 6))
     if selected['product_factory'] not in FACTORIES:
         selected['product_factory'] = ''
     selected['availability'] = {'unavailable': 'unusable', 'unclassified': 'other'}.get(selected['availability'], selected['availability'])
@@ -236,15 +223,22 @@ def build_board(entries, refs, filters, snapshot_date):
     unmapped = set()
     for row in rows:
         group = groups.setdefault((row['factory'], row['name']), dict(name=row['name'], factory=row['factory'],
-            tendon=row['name'].casefold() == 'tendon', lines={}, **totals()))
+            tendon=row['name'].casefold() == 'tendon', lines={}, monthly_shipment=ZERO,
+            shipment_erps=set(), **totals()))
         add_total(group, row)
+        if row['erp'] and row['erp'] not in group['shipment_erps']:
+            group['monthly_shipment'] += shipment_averages.get(row['erp'], ZERO)
+            group['shipment_erps'].add(row['erp'])
         line_key = (row['category'], row['type'], row['size'])
         if not row['mapped']:
             line_key += (row['icube'] or row['erp'],)
             unmapped.add(row['icube'] or row['erp'])
         line = group['lines'].setdefault(line_key, dict(category=row['category'], type=row['type'], size=row['size'],
-            original_specs=set(), places={}, **totals()))
+            original_specs=set(), places={}, monthly_shipment=ZERO, shipment_erps=set(), **totals()))
         add_total(line, row)
+        if row['erp'] and row['erp'] not in line['shipment_erps']:
+            line['monthly_shipment'] += shipment_averages.get(row['erp'], ZERO)
+            line['shipment_erps'].add(row['erp'])
         if row['original_spec']:
             line['original_specs'].add(row['original_spec'])
         pkey = (row['warehouse'], row['place'], row['bucket'])
@@ -264,7 +258,12 @@ def build_board(entries, refs, filters, snapshot_date):
         section_total = totals()
         for index, group in enumerate(products, 1):
             group['id'] = f'product-{factory}-{index}'
+            group.pop('shipment_erps', None)
+            group['coverage_months'] = group['available'] / group['monthly_shipment'] if group['monthly_shipment'] > 0 else None
             lines = list(group.pop('lines').values())
+            for line in lines:
+                line.pop('shipment_erps', None)
+                line['coverage_months'] = line['available'] / line['monthly_shipment'] if line['monthly_shipment'] > 0 else None
             lines.sort(key=lambda row: (category_key(row['category']), natural(row['type']), natural(row['size'])))
             group['rows'] = lines
             group['specs'] = sorted({row['size'] for row in lines if row['size'] not in {'', '-'}}, key=natural)
@@ -309,6 +308,8 @@ def build_board(entries, refs, filters, snapshot_date):
                 raise ValueError('Product total mismatch')
             if not all(row['size'] for row in group['rows']):
                 raise ValueError('Missing specification label')
+    overall['monthly_shipment'] = sum((group['monthly_shipment'] for section in sections for group in section['products'] if group['monthly_shipment'] > 0), ZERO)
+    overall['coverage_months'] = overall['available'] / overall['monthly_shipment'] if overall['monthly_shipment'] > 0 else None
     return dict(filters=selected, sections=sections, metrics=overall, warehouses=warehouses,
                 invalid_rows=invalid_rows, excluded_rows=excluded_rows, missing_cost=len(missing_cost),
                 unmapped=len(unmapped), source_rows=len(rows), snapshot_date=snapshot_date,
@@ -339,10 +340,19 @@ def install_inventory_spec_view(app, db):
         if snapshot is not None:
             if not isinstance(snapshot.as_of, date):
                 abort(400)
+            try:
+                shipment_period = int(request.args.get('shipment_period', 6))
+            except ValueError:
+                shipment_period = 6
+            if shipment_period not in {3, 6, 12}:
+                shipment_period = 6
+            from shipment_analysis import shipment_average_index
+            shipment_averages, shipment_meta = shipment_average_index(app, db, shipment_period)
             filters = dict(q=request.args.get('q', ''), warehouses=request.args.getlist('warehouse'),
                 product_factory=request.args.get('product_factory', ''), availability=request.args.get('availability', ''),
-                show_value=request.args.get('show_value') == '1')
-            board = build_board(snapshot.payload or [], refs, filters, snapshot.as_of)
+                show_value=request.args.get('show_value') == '1', shipment_period=shipment_period)
+            board = build_board(snapshot.payload or [], refs, filters, snapshot.as_of, shipment_averages)
+            board['shipment'] = shipment_meta
         return render_template('inventory_specs.html', board=board, factories=FACTORIES,
                                can_edit=current_user.role in {'admin','editor'},
                                snapshot_id=snapshot.id if snapshot is not None else '')
