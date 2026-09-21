@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block page_title %}제품별 유효기간 현황{% endblock %}
-{% block breadcrumb %}공장 · 제품 · 국내/CE 구분 · 타입 · 규격 · LOT{% endblock %}
+{% block breadcrumb %}창고 · 장소 · 제품 · 규격 · 수량 · 금액{% endblock %}
 {% block content %}
 {% set capture_mode = request.args.get('capture') == '1' %}
 {% if capture_mode %}
@@ -15,6 +15,7 @@
 .ex-filters {display:flex;flex-wrap:wrap;gap:8px;align-items:end;padding:12px;background:white;border:1px solid #c6d3dc;border-radius:8px}
 .ex-filters label {display:grid;gap:3px;font-size:12px;font-weight:700}.ex-filters input,.ex-filters select {height:33px;max-width:230px;padding:5px;border:1px solid #b8c8d2;border-radius:4px;font-size:12px}
 .ex-filters label.ex-check {display:flex;align-items:center}.ex-filters label.ex-check input {height:auto}
+.ex-column-options{display:flex;gap:5px;flex-wrap:wrap}.ex-column-options label{display:flex;align-items:center;gap:4px;padding:7px;border:1px solid #b8c8d2;border-radius:4px;background:#f7fafb}.ex-column-options input{height:auto!important;margin:0}
 .ex-multi-filter{display:grid;gap:3px;font-size:12px;font-weight:800;min-width:190px}.ex-multi-options{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px;max-width:330px;max-height:88px;overflow:auto;padding:5px;border:1px solid #b8c8d2;border-radius:4px;background:#fff}.ex-multi-options label{display:flex;align-items:center;gap:4px;min-width:0;padding:3px 4px;border-radius:3px;font-weight:600}.ex-multi-options label:hover{background:#eef4f7}.ex-multi-options input{height:auto!important;margin:0;flex:0 0 auto}.ex-multi-options span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ex-band-picker{min-width:310px}.ex-band-picker>span{font-size:12px;font-weight:800}.ex-band-options{display:flex;gap:5px;flex-wrap:wrap;margin-top:3px}.ex-band-options label{display:flex;align-items:center;gap:3px;padding:5px 7px;border:1px solid #b8c8d2;border-radius:4px;background:#f7fafb;font-weight:600}.ex-band-options input{height:auto!important;margin:0}
 .ex-filters button,.ex-filters a {font-size:12px;padding:7px 10px;background:#f2f6f8;border:1px solid #b8c8d2;border-radius:4px;cursor:pointer}
@@ -38,14 +39,16 @@
 .ex-table details>summary {cursor:pointer;color:#275d7a;font-size:11px}.ex-table details[open] {min-width:200px}.ex-table details p {margin:5px 0;font-size:11px}
 .ex-table tfoot th,.ex-table tfoot td{background:#dfecef;border-top:2px solid #78949c;font-weight:900}.ex-subtotal{text-align:right!important}
 .ex-empty {padding:25px;background:white;border:1px solid #c6d3dc}
+.ex-place-card{background:#fff;border:1px solid #b8ccd7;border-radius:6px;margin-bottom:9px;overflow:hidden}.ex-place-head{display:flex;justify-content:space-between;gap:10px;padding:7px 10px;background:#edf4f7;border-bottom:1px solid #bfd0dc}.ex-place-head h3{margin:0;font-size:14px;color:#174464}.ex-summary-table{min-width:680px}.ex-summary-table td:first-child{font-weight:800;color:#174464}.ex-money{text-align:right!important;font-variant-numeric:tabular-nums;font-weight:700}.ex-missing{color:#a34216;font-size:10px}
 @media(max-width:1000px){.ex-stats{grid-template-columns:repeat(3,1fr)}}
 @media print { @page {size:A4 landscape;margin:7mm} body:has(.ex-board) .sidebar,body:has(.ex-board) .app>header,.ex-filters,.ex-tools,.ex-table details{display:none!important} body:has(.ex-board) .app{margin:0} body:has(.ex-board) main{padding:0;max-width:none}.ex-stats{grid-template-columns:repeat(6,1fr)}.ex-product{break-inside:auto}.ex-table tr{break-inside:avoid}.ex-table thead{display:table-header-group}.ex-table-wrap{overflow:visible}.ex-table{min-width:0}.ex-table th,.ex-table td{font-size:8pt;padding:3px}.ex-product>summary{break-after:avoid}.ex-factory{break-before:page}.ex-factory:first-of-type{break-before:auto} }
 </style>
-<div class="ex-board" data-release="expiry-display-20260921-09">
- <div class="ex-title"><div><h1>제품별 유효기간 현황</h1><p>제품 → 국내/CE 등 구분 → 타입 → 규격 → LOT별 잔여기간</p></div><div class="ex-title-side"><div>재고 기준일 {{ snapshot.as_of if snapshot else '-' }}<br>유효기간 평가일 {{ as_of }}</div><div class="ex-print-actions"><a href="{{ filter_url(capture='1', product_factory='12') }}">1·2공장 인쇄</a><a href="{{ filter_url(capture='1', product_factory='3') }}">3공장 인쇄</a></div></div></div>
+<div class="ex-board" data-release="expiry-display-20260921-10">
+ <div class="ex-title"><div><h1>창고·장소별 유효기간 현황</h1><p>{{ 'LOT별 상세' if detail_mode else '창고 → 장소 → 제품 → 규격별 요약' }}</p></div><div class="ex-title-side"><div>재고 기준일 {{ snapshot.as_of if snapshot else '-' }}<br>유효기간 평가일 {{ as_of }}</div><div class="ex-print-actions"><a href="{{ filter_url(capture='1', product_factory='12') }}">1·2공장 인쇄</a><a href="{{ filter_url(capture='1', product_factory='3') }}">3공장 인쇄</a></div></div></div>
  <form class="ex-filters" method="get">
   {% if snapshot %}<input type="hidden" name="snapshot" value="{{ snapshot.id }}">{% endif %}
   {% if request.args.get('factory') %}<input type="hidden" name="factory" value="{{ request.args.factory }}">{% endif %}
+  <input type="hidden" name="view" value="{{ 'detail' if detail_mode else 'summary' }}"><input type="hidden" name="columns_set" value="1">
   <label>제품·규격·LOT 검색<input name="q" value="{{ request.args.get('q','') }}" placeholder="제품명, 국내/CE, 타입, 규격, LOT"></label>
   <label>공장<select name="product_factory"><option value="">전체</option>{% for k,v in factories.items() %}<option value="{{ k }}" {{ 'selected' if k==selected_factory }}>{{ v }}</option>{% endfor %}</select></label>
   <div class="ex-band-picker"><span>유효기간 구간 복수 선택</span><div class="ex-band-options">{% for k,v in bands %}<label><input type="checkbox" name="expiry_band" value="{{ k }}" {{ 'checked' if k in selected_bands }}>{{ v }}</label>{% endfor %}</div></div>
@@ -54,11 +57,13 @@
   <div class="ex-multi-filter"><span>장소 복수 선택{% if not selected_locations %} · 전체{% endif %}</span><div class="ex-multi-options">{% for loc in locations %}<label title="{{ loc or '장소 미지정' }}"><input type="checkbox" name="location" value="{{ loc if loc else '__unassigned__' }}" {{ 'checked' if loc in selected_locations }}><span>{{ loc or '장소 미지정' }}</span></label>{% endfor %}</div></div>
   <label>상태<select name="status"><option value="">전체</option>{% for s in statuses %}<option {{ 'selected' if request.args.get('status')==s }}>{{ s }}</option>{% endfor %}</select></label>
   <label class="ex-check"><input type="checkbox" name="zero" value="1" {{ 'checked' if request.args.get('zero')=='1' }}>0 재고 포함</label>
+  <div><b style="font-size:12px">요약표 선택 열</b><div class="ex-column-options"><label><input type="checkbox" name="column" value="amount" {{ 'checked' if 'amount' in selected_columns }}>금액</label><label><input type="checkbox" name="column" value="expiry" {{ 'checked' if 'expiry' in selected_columns }}>최단 유효기간</label></div></div>
   <button>조회</button><a href="{{ url_for(request.endpoint) }}">초기화</a><a href="{{ export_url }}">조회 결과 CSV</a>
  </form>
  <div class="ex-stats">{% for k,label in bands %}<a href="{{ filter_url(expiry_band=k, bucket='') }}" class="ex-{{ k }}" aria-current="{{ 'true' if k in selected_bands else 'false' }}"><span>{{ label }}</span><b>{{ band_stats[k].quantity|qty }} <small>EA</small></b><small>{{ band_stats[k].lots|length }} LOT</small></a>{% endfor %}</div>
- <p class="ex-note">현재 조회: {{ board.product_count }} 제품군 · {{ board.row_count }}행 · 양수 EA 재고 {{ board.total|qty }} EA{% if selected_warehouses %}<br>창고: {{ selected_warehouses|join(', ') }}{% endif %}{% if selected_locations %} · 장소: {% for loc in selected_locations %}{{ loc or '장소 미지정' }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}. 기간 구간은 서로 중복되지 않습니다. 오늘까지 사용기한인 재고는 ‘오늘 만료’로 표시합니다.{% if board.excluded_count %}<br>음수·0·EA 외 단위 {{ board.excluded_count }}행은 상세표에는 유지하고 상단 EA 합계에서만 제외했습니다.{% endif %}</p>
- <div class="ex-tools"><div>LOT·날짜와 창고·장소를 표에서 바로 확인하고, ‘근거’에서 원래 품번과 날짜 계산근거를 확인할 수 있습니다.</div><div><button type="button" data-ex-open>전체 펼치기</button> <button type="button" data-ex-close>전체 접기</button> <a href="{{ url_for('expiry.special_rules') }}">특이사항 관리</a> <a href="{{ url_for('expiry.index') if request.endpoint=='expiry.dashboard_expiry' else url_for('expiry.dashboard_expiry') }}">{{ '유효기간 현황' if request.endpoint=='expiry.dashboard_expiry' else '유효기간 대시보드' }}</a></div></div>
+ <p class="ex-note">현재 조회: {{ location_board.row_count if not detail_mode else board.row_count }}행 · 양수 EA 재고 {{ board.total|qty }} EA{% if selected_warehouses %}<br>창고: {{ selected_warehouses|join(', ') }}{% endif %}{% if selected_locations %} · 장소: {% for loc in selected_locations %}{{ loc or '장소 미지정' }}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}. 금액은 평가일 기준 최신 제조원가를 적용합니다.{% if board.excluded_count %}<br>음수·0·EA 외 단위 {{ board.excluded_count }}행은 상단 EA 합계에서 제외했습니다.{% endif %}</p>
+ <div class="ex-tools"><div>{{ 'LOT·날짜 계산근거를 확인하는 상세 화면입니다.' if detail_mode else '같은 창고·장소·제품·규격의 LOT 수량을 합산한 관리용 요약입니다.' }}</div><div><a href="{{ filter_url(view='summary', capture='') }}" aria-current="{{ 'false' if detail_mode else 'true' }}">창고·장소 요약</a> <a href="{{ filter_url(view='detail', capture='') }}" aria-current="{{ 'true' if detail_mode else 'false' }}">LOT 상세 보기</a> <button type="button" data-ex-open>전체 펼치기</button> <button type="button" data-ex-close>전체 접기</button> <a href="{{ url_for('expiry.special_rules') }}">특이사항 관리</a></div></div>
+ {% if detail_mode %}
  {% for section in board.sections %}
  <section class="ex-factory"><h2>{{ section.label }} · {{ section.products|length }}개 제품군 · {% for t in section.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %} / {% endif %}{% endfor %}</h2>
   {% for p in section.products %}<details class="ex-product" open><summary><h3>{{ p.name }}</h3><span>{{ p.rows|length }}행 · 양수 EA {{ p.quantity|qty }}</span></summary>
@@ -70,6 +75,16 @@
    </table></div>{% endfor %}
   </details>{% endfor %}
  </section>{% else %}<p class="ex-empty">{{ '조회 조건에 맞는 재고가 없습니다.' if snapshot else '등록된 ERP 재고가 없습니다.' }}</p>{% endfor %}
+ {% else %}
+ {% for section in location_board.sections %}
+ <section class="ex-factory"><h2>{{ section.label }} · {% for t in section.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %} / {% endif %}{% endfor %}{% if 'amount' in selected_columns %} · {{ '{:,.0f}'.format(section.amount) }}원{% if section.missing_cost %}*{% endif %}{% endif %}</h2>
+  {% for place in section.places %}<article class="ex-place-card"><div class="ex-place-head"><h3>{{ place.warehouse }} → {{ place.location }}</h3><span>{% for t in place.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %} / {% endif %}{% endfor %}</span></div>
+   <div class="ex-table-wrap"><table class="ex-table ex-summary-table"><thead><tr><th>제품</th><th>규격</th><th>수량</th>{% if 'amount' in selected_columns %}<th>금액</th>{% endif %}{% if 'expiry' in selected_columns %}<th>가장 빠른 유효기간</th><th>잔여일</th>{% endif %}</tr></thead><tbody>
+   {% for r in place.rows %}<tr><td>{{ r.name }}</td><td>{{ r.size }}</td><td class="ex-qty">{% for t in r.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>{% if 'amount' in selected_columns %}<td class="ex-money">{{ '{:,.0f}'.format(r.amount) }}원{% if r.missing_cost %}<br><span class="ex-missing">원가 미등록 포함</span>{% endif %}</td>{% endif %}{% if 'expiry' in selected_columns %}<td class="ex-{{ r.earliest_band }}">{{ r.earliest or '확인 필요' }}</td><td class="ex-{{ r.earliest_band }}">{% if r.earliest_remaining is none %}확인 필요{% elif r.earliest_remaining==0 %}오늘 만료{% elif r.earliest_remaining<0 %}{{ -r.earliest_remaining }}일 경과{% else %}{{ r.earliest_remaining }}일{% endif %}</td>{% endif %}</tr>{% endfor %}
+   </tbody><tfoot><tr><th colspan="2">장소 소계</th><td class="ex-subtotal">{% for t in place.totals %}{{ t.quantity|qty }} {{ t.unit }}{% if not loop.last %}<br>{% endif %}{% endfor %}</td>{% if 'amount' in selected_columns %}<td class="ex-money">{{ '{:,.0f}'.format(place.amount) }}원{% if place.missing_cost %}*{% endif %}</td>{% endif %}{% if 'expiry' in selected_columns %}<td colspan="2"></td>{% endif %}</tr></tfoot></table></div>
+  </article>{% endfor %}
+ </section>{% else %}<p class="ex-empty">{{ '조회 조건에 맞는 재고가 없습니다.' if snapshot else '등록된 ERP 재고가 없습니다.' }}</p>{% endfor %}
+ {% endif %}
 </div>
 <script>(()=>{const groups=()=>[...document.querySelectorAll('.ex-product')];document.querySelector('[data-ex-open]').onclick=()=>groups().forEach(e=>e.open=true);document.querySelector('[data-ex-close]').onclick=()=>groups().forEach(e=>e.open=false);let state=[];addEventListener('beforeprint',()=>{state=groups().map(e=>e.open);groups().forEach(e=>e.open=true);});addEventListener('afterprint',()=>groups().forEach((e,i)=>e.open=state[i]));})();</script>
 {% endif %}
