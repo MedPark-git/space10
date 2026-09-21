@@ -5,6 +5,7 @@
 <a class="{{ 'active' if request.endpoint=='expiry.index' }}" href="{{ url_for('expiry.index') }}">유효기간 현황</a>
 <a class="{{ 'active' if request.endpoint=='expiry.inventory_location' }}" href="{{ url_for('expiry.inventory_location') }}">재고 위치 현황</a>
 <a class="{{ 'active' if request.endpoint in ['expiry.shipment_analysis','expiry.shipment_download'] }}" href="{{ url_for('expiry.shipment_analysis') }}">출고량·재고 보유개월</a>
+<a class="{{ 'active' if request.endpoint=='expiry.order_fulfillment' }}" href="{{ url_for('expiry.order_fulfillment') }}">수주·출하 관리</a>
 {% if current_user.role in ['admin','editor'] %}<a class="{{ 'active' if request.endpoint in ['expiry.product_display_master','expiry.product_display_master_download'] }}" href="{{ url_for('expiry.product_display_master') }}">제품 기준표 관리</a>{% endif %}
 <a class="{{ 'active' if request.endpoint=='expiry.master_data' or request.endpoint in ['expiry.reference_list','expiry.import_data','expiry.preview','expiry.alerts'] }}" href="{{ url_for('expiry.master_data') }}">기준정보 관리</a>
 <a class="{{ 'active' if request.endpoint=='expiry.stock_history' }}" href="{{ url_for('expiry.stock_history') }}">재고 등록·이력</a>
