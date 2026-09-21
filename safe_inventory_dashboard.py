@@ -8,9 +8,11 @@ from sqlalchemy import select
 
 from expiry_engine import calculate, family_rules, index_mts, number, stock_scope
 from product_display_master import lookup as product_display_lookup
+from product_display_admin import install_product_display_admin
 
 
 def make_inventory_dashboard_view(app, db):
+    install_product_display_admin(app, db)
     Reference = app.extensions["expiry_models"]["Reference"]
     Import = app.extensions["expiry_models"]["Import"]
 
@@ -33,7 +35,7 @@ def make_inventory_dashboard_view(app, db):
         return "unclassified"
 
     def product_factory(display_name, row):
-        if display_name in {"MedParkAlloD", "S1-Allo 덴탈"}:
+        if display_name in {"MedParkAlloD", "S1-Allo 메디컬", "S1-Allo 덴탈"}:
             return "3"
         factory = str(row.get("factory") or "").strip()
         if factory == "3":
@@ -149,7 +151,7 @@ def make_inventory_dashboard_view(app, db):
 
         filtered = []
         for row in rows:
-            display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"))
+            display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"), refs=refs)
             row["display_name"] = display.get("name") or row.get("name") or "제품명 미등록"
             row["display_type"] = display.get("type") or "-"
             row["display_size"] = display.get("size") or row.get("spec") or "-"
