@@ -1,4 +1,11 @@
 import re
+from functools import lru_cache
+from product_display_data import DATA
+
+@lru_cache(maxsize=1)
+def exact_master():
+    """User-approved item-code master, 2026-09-21 (1262 codes)."""
+    return DATA
 
 CATNUM={'01':'국내','02':'일반수출','03':'스트라우만','04':'포인트닉스','05':'디오','06':'NJ메디','07':'덴티스','08':'하이니스','10':'후원EDI','11':'선광덴탈'}
 SIZE_G={'015':'0.15g','025':'0.25g','050':'0.5g','100':'1.0g','200':'2.0g','300':'3.0g'}
@@ -119,8 +126,9 @@ def _classify(c):
 
 def lookup(icube, fallback_name="", fallback_spec=""):
     code=str(icube or "").strip().upper()
+    item=exact_master().get(code)
     try:
-        item=_classify(code)
+        item=item or _classify(code)
     except Exception:
         item=None
     if not item:
