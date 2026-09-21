@@ -4,8 +4,8 @@ from flask import render_template, request, url_for
 from inventory_spec_view import clean, display, natural, factory_for, FACTORIES
 from product_display_master import lookup
 
-BANDS = [('expired', '만료·오늘 만료'), ('due90', '1~90일'), ('due180', '91~180일'),
-         ('due365', '181~365일'), ('safe', '365일 초과'), ('issue', '확인 필요')]
+BANDS = [('expired', '만료'), ('due90', '3개월 미만'), ('due180', '6개월 미만'),
+         ('due365', '1년 미만'), ('safe', '1년 초과'), ('issue', '확인 필요')]
 
 def expiry_band(row):
     days = row.get('remaining')
@@ -46,8 +46,8 @@ def effective_cost(indexed, icube, as_of):
     candidates = [item for item in indexed.get(clean(icube).upper(), []) if item[0] <= target]
     return candidates[-1] if candidates else (None, None)
 
-def build_location_summary(rows, refs, as_of, factory=''):
-    """Aggregate LOT rows into warehouse/location/product/spec management rows."""
+def build_location_summary(rows, refs, as_of, factory='', group_by='warehouse'):
+    """Aggregate by expiry risk first, then the selected warehouse/location axis."""
     indexed_costs = cost_index(refs)
     sections = {}
     for source in rows:
@@ -60,11 +60,22 @@ def build_location_summary(rows, refs, as_of, factory=''):
             continue
         warehouse = clean(row.get('warehouse')) or '창고 미지정'
         location = clean(row.get('location')) or '장소 미지정'
-        section = sections.setdefault(fac, dict(key=fac, label=FACTORIES[fac], places={}))
-        place = section['places'].setdefault((warehouse, location), dict(
-            warehouse=warehouse, location=location, rows={}, source_rows=[]))
-        place['source_rows'].append(row)
-        item = place['rows'].setdefault((name, size), dict(
+        band_key = expiry_band(row)
+        band_label = dict(BANDS)[band_key]
+        if group_by == 'location':
+            axis_key, axis_label = location, location
+        elif group_by == 'both':
+            axis_key, axis_label = (warehouse, location), f'{warehouse} → {location}'
+        else:
+            axis_key, axis_label = warehouse, warehouse
+        section = sections.setdefault(fac, dict(key=fac, label=FACTORIES[fac], bands={}, source_rows=[]))
+        section['source_rows'].append(row)
+        band = section['bands'].setdefault(band_key, dict(
+            key=band_key, label=band_label, groups={}, source_rows=[]))
+        band['source_rows'].append(row)
+        group = band['groups'].setdefault(axis_key, dict(label=axis_label, rows={}, source_rows=[]))
+        group['source_rows'].append(row)
+        item = group['rows'].setdefault((name, size), dict(
             name=name, size=size, source_rows=[], amount=Decimal('0'), missing_cost=False,
             earliest=None, earliest_remaining=None, earliest_band='issue'))
         item['source_rows'].append(row)
@@ -85,26 +96,35 @@ def build_location_summary(rows, refs, as_of, factory=''):
         if fac not in sections:
             continue
         section = sections[fac]
-        places = []
-        for place in section['places'].values():
-            items = list(place['rows'].values())
-            for item in items:
-                item['totals'] = unit_totals(item.pop('source_rows'))
-            items.sort(key=lambda item: (natural(item['name']), natural(item['size'])))
-            place['rows'] = items
-            place['totals'] = unit_totals(place.pop('source_rows'))
-            place['amount'] = sum((item['amount'] for item in items), Decimal('0'))
-            place['missing_cost'] = any(item['missing_cost'] for item in items)
-            places.append(place)
-        places.sort(key=lambda place: (natural(place['warehouse']), natural(place['location'])))
-        section['places'] = places
-        section['totals'] = [dict(unit=unit, quantity=sum(
-            (total['quantity'] for place in places for total in place['totals'] if total['unit'] == unit), Decimal('0')))
-            for unit in sorted({total['unit'] for place in places for total in place['totals']})]
-        section['amount'] = sum((place['amount'] for place in places), Decimal('0'))
-        section['missing_cost'] = any(place['missing_cost'] for place in places)
+        bands = []
+        for band_key, band_label in BANDS:
+            if band_key not in section['bands']:
+                continue
+            band = section['bands'][band_key]
+            groups = []
+            for group in band['groups'].values():
+                items = list(group['rows'].values())
+                for item in items:
+                    item['totals'] = unit_totals(item.pop('source_rows'))
+                items.sort(key=lambda item: (natural(item['name']), natural(item['size'])))
+                group['rows'] = items
+                group['totals'] = unit_totals(group.pop('source_rows'))
+                group['amount'] = sum((item['amount'] for item in items), Decimal('0'))
+                group['missing_cost'] = any(item['missing_cost'] for item in items)
+                groups.append(group)
+            groups.sort(key=lambda group: natural(group['label']))
+            band['groups'] = groups
+            band['totals'] = unit_totals(band.pop('source_rows'))
+            band['amount'] = sum((group['amount'] for group in groups), Decimal('0'))
+            band['missing_cost'] = any(group['missing_cost'] for group in groups)
+            bands.append(band)
+        section['bands'] = bands
+        section['totals'] = unit_totals(section.pop('source_rows'))
+        section['amount'] = sum((band['amount'] for band in bands), Decimal('0'))
+        section['missing_cost'] = any(band['missing_cost'] for band in bands)
         ordered.append(section)
-    return dict(sections=ordered, row_count=sum(len(place['rows']) for section in ordered for place in section['places']))
+    return dict(sections=ordered, row_count=sum(
+        len(group['rows']) for section in ordered for band in section['bands'] for group in band['groups']))
 
 def build_expiry_board(rows, refs, factory=''):
     sections = {}
@@ -175,23 +195,26 @@ def render_expiry_display(current_view):
         selected_factory = ''
     valid_bands = {key for key, _ in BANDS}
     selected_bands = [value for value in request.args.getlist('expiry_band') if value in valid_bands]
+    group_by = request.args.get('group_by', 'warehouse')
+    if group_by not in {'warehouse', 'location', 'both'}:
+        group_by = 'warehouse'
     detail_mode = request.args.get('view') == 'detail'
     if request.args.get('columns_set') == '1':
         selected_columns = {value for value in request.args.getlist('column') if value in {'amount', 'expiry'}}
     else:
-        selected_columns = {'amount', 'expiry'}
+        selected_columns = {'amount'}
     all_board = build_expiry_board(rows, refs, selected_factory)
     if selected_bands:
         rows = [row for row in rows if expiry_band(row) in selected_bands]
     board = build_expiry_board(rows, refs, selected_factory)
-    location_board = build_location_summary(rows, refs, as_of, selected_factory)
+    location_board = build_location_summary(rows, refs, as_of, selected_factory, group_by)
     def filter_url(**changes):
         params = request.args.to_dict(flat=False)
         params.pop('page',None)
         params.update(changes)
         return url_for(request.endpoint, **params)
     return render_template('expiry_display.html', board=board, location_board=location_board,
-        detail_mode=detail_mode,selected_columns=selected_columns,snapshot=snapshot, as_of=as_of,
+        detail_mode=detail_mode,selected_columns=selected_columns,group_by=group_by,snapshot=snapshot, as_of=as_of,
         warehouses=warehouses,locations=locations,statuses=statuses,bands=BANDS,band_stats=all_board['stats'],
         selected_warehouses=selected_warehouses,selected_locations=selected_locations,
         selected_bands=selected_bands,factories=FACTORIES,
