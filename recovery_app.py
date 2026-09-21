@@ -68,10 +68,14 @@ def verify_authenticated_get_views():
                 if 'Internal Server Error' in body or '<title>Request error</title>' in body:
                     raise RuntimeError(f'{endpoint}: error document returned')
                 if endpoint == 'expiry.dashboard':
-                    if 'data-release="inventory-specs-20260921-01"' not in body:
+                    if 'data-release="inventory-specs-20260921-02"' not in body:
                         raise RuntimeError('Dashboard release marker missing')
                     if '규격(사이즈)' not in body:
                         raise RuntimeError('Specification column missing')
+                    if '기타가용' not in body or '완제품' not in body or '공정중' not in body:
+                        raise RuntimeError('Per-spec quantity columns missing')
+                    if 'iv-spec-qty-chips' not in body:
+                        raise RuntimeError('Per-spec quantity summary missing')
                     if '<details class="product-stock-group"' not in body:
                         raise RuntimeError('Dashboard rendered without product stock groups')
                 passed += 1
@@ -98,7 +102,7 @@ def verify_anonymous_protection():
     return {'passed': passed, 'total': len(paths)}
 
 
-app.add_url_rule('/health/inventory-specs-20260921-01',
+app.add_url_rule('/health/inventory-specs-20260921-02',
                  endpoint='inventory_spec_readiness',
                  view_func=lambda: health_with_render_verification(), methods=['GET'])
 
@@ -117,7 +121,7 @@ def health_with_render_verification():
                   authenticated_page_checks=render['passed'],
                   authenticated_page_checks_total=render['total'],
                   anonymous_access_checks=auth['passed'],
-                  recovery_revision='inventory-specs-20260921-01',
+                  recovery_revision='inventory-specs-20260921-02',
                   render_failures=render['failures'])
     if not passed:
         result.update(status='error', application_ready=False)
