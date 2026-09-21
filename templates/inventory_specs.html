@@ -12,8 +12,8 @@
 <form class="iv-filters" method="get" id="iv-filter-form">
   {% if snapshot_id %}<input type="hidden" name="snapshot" value="{{ snapshot_id }}">{% endif %}
   <label class="iv-search">검색<input name="q" value="{{ board.filters.q }}" placeholder="제품명, 타입, 규격, 분류"></label>
-  <label>제품 공장<select name="product_factory"><option value="">전체</option>{% for k,v in factories.items() %}<option value="{{ k }}" {{ 'selected' if k==board.filters.product_factory }}>{{ v }}</option>{% endfor %}</select></label>
-  <label>재고 구분<select name="availability"><option value="">전체</option><option value="available" {{ 'selected' if board.filters.availability=='available' }}>가용</option><option value="other" {{ 'selected' if board.filters.availability=='other' }}>기타</option><option value="unusable" {{ 'selected' if board.filters.availability=='unusable' }}>불용</option></select></label>
+  <label>제품 공장<select name="product_factory"><option value="">전체<[REDACTED]>{% for k,v in factories.items() %}<option value="{{ k }}" {{ 'selected' if k==board.filters.product_factory }}>{{ v }}<[REDACTED]>{% endfor %}</select></label>
+  <label>재고 구분<select name="availability"><option value="">전체<[REDACTED]><option value="available" {{ 'selected' if board.filters.availability=='available' }}>가용<[REDACTED]><option value="other" {{ 'selected' if board.filters.availability=='other' }}>기타<[REDACTED]><option value="unusable" {{ 'selected' if board.filters.availability=='unusable' }}>불용<[REDACTED]></select></label>
   <details class="iv-warehouse"><summary>창고 복수 선택 <span>{{ board.filters.warehouses|length if board.filters.warehouses else '전체' }}</span></summary><div class="iv-options"><p>선택하지 않으면 전체 창고를 표시합니다.</p>{% for w in board.warehouses %}<label><input type="checkbox" name="warehouse" value="{{ w }}" {{ 'checked' if w in board.filters.warehouses }}>{{ w }}</label>{% endfor %}<button type="button" id="iv-all-warehouses">전체 창고</button></div></details>
   <label class="iv-switch"><input type="checkbox" name="show_value" value="1" id="iv-money" {{ 'checked' if board.filters.show_value }}><span>재고금액 보기</span></label>
   <div class="iv-actions"><button type="submit" class="iv-primary">조회</button><a href="{{ url_for('expiry.dashboard') }}">초기화</a></div>
@@ -45,7 +45,7 @@
     {% for g in section.products %}
     <tr>
       <td><a class="iv-jump" href="#{{ g.id }}">{{ g.name }}</a></td>
-      <td><div class="iv-spec-chips">{% set chips=g.types if g.tendon else g.specs %}{% for s in chips[:7] %}<span>{{ s }}</span>{% endfor %}{% if chips|length>7 %}<details><summary>+{{ chips|length-7 }} 더 보기</summary>{{ chips[7:]|join(' / ') }}</details>{% endif %}{% if g.tendon %}<small>유형별 합산</small>{% endif %}</div></td>
+      <td><div class="iv-spec-chips iv-spec-qty-chips">{% for item in g.spec_summary[:8] %}<span><strong>{{ item.label }}</strong><b>{{ item.total|iv_qty }} EA</b></span>{% endfor %}{% if g.spec_summary|length>8 %}<details><summary>+{{ g.spec_summary|length-8 }} 더 보기</summary><div class="iv-more-specs">{% for item in g.spec_summary[8:] %}<span><strong>{{ item.label }}</strong><b>{{ item.total|iv_qty }} EA</b></span>{% endfor %}</div></details>{% endif %}{% if g.tendon %}<small>텐던은 타입별 합산</small>{% endif %}</div></td>
       <td class="iv-number iv-available">{{ g.available|iv_qty }}</td>
       <td class="iv-number iv-other">{{ g.other|iv_qty }}</td>
       <td class="iv-number iv-unusable">{{ g.unusable|iv_qty }}</td>
@@ -69,20 +69,33 @@
     <summary><h3>{{ g.name }}</h3><span>{{ g.total|iv_qty }} <small>EA</small></span></summary>
     {% if g.tendon %}<p class="iv-tendon-note">텐던은 타입별로 합산하며 세부 크기는 나누지 않습니다.</p>{% endif %}
     <div class="iv-table-wrap"><table class="iv-detail-table">
-      <thead><tr><th class="iv-type-head">타입</th><th class="iv-spec-head">규격(사이즈)</th><th>가용</th><th>기타</th><th>불용</th><th>총재고</th><th class="iv-money">재고금액</th></tr></thead>
+      <thead>
+        <tr>
+          <th class="iv-type-head" rowspan="2">타입</th>
+          <th class="iv-spec-head" rowspan="2">규격(사이즈)</th>
+          <th class="iv-available-head" colspan="3">가용재고</th>
+          <th rowspan="2">기타</th>
+          <th rowspan="2">불용</th>
+          <th rowspan="2">총재고</th>
+          <th class="iv-money" rowspan="2">재고금액</th>
+        </tr>
+        <tr class="iv-subhead"><th>완제품</th><th>공정중</th><th>기타가용</th></tr>
+      </thead>
       {% for c in g.categories %}
       <tbody class="iv-category">
-        <tr class="iv-category-heading"><th colspan="7"><div><span>{{ c.name }}</span><span>{{ c.total|iv_qty }} EA</span></div></th></tr>
+        <tr class="iv-category-heading"><th colspan="9"><div><span>{{ c.name }}</span><span>{{ c.total|iv_qty }} EA</span></div></th></tr>
         {% for r in c.rows %}
         <tr class="iv-spec-row" data-spec="{{ r.size }}">
           <th class="iv-type">{{ r.type if r.type_start else '' }}</th>
           <td class="iv-spec"><strong>{{ '유형별 합산' if g.tendon else r.size }}</strong>
             <details class="iv-places"><summary>보관 위치 {{ r.locations|length }}</summary><div>{% if r.original_specs %}<p class="iv-original-spec">ERP 원본 규격: {{ r.original_specs|join(' / ') }}</p>{% endif %}{% for p in r.locations %}<p><span>{{ p.warehouse }} / {{ p.place }}<small>{{ {'available':'가용','other':'기타','unusable':'불용'}[p.bucket] }}</small></span><b>{{ p.quantity|iv_qty }} EA</b></p>{% endfor %}</div></details>
           </td>
-          <td class="iv-number iv-available"><b>{{ r.available|iv_qty }}</b>{% if r.available %}<small>완제품 {{ r.available_finished|iv_qty }} · 공정중 {{ r.available_work|iv_qty }}{% if r.available_elsewhere %}<br>그 외 가용 {{ r.available_elsewhere|iv_qty }}{% endif %}</small>{% endif %}<div class="iv-money iv-bucket-value">{{ bucket_money(r,'available') }}</div></td>
-          <td class="iv-number iv-other">{{ r.other|iv_qty }}{% if r.location_exception %}<small class="iv-warning">위치 확인 필요 {{ r.location_exception|iv_qty }}</small>{% endif %}<div class="iv-money iv-bucket-value">{{ bucket_money(r,'other') }}</div></td>
-          <td class="iv-number iv-unusable">{{ r.unusable|iv_qty }}<div class="iv-money iv-bucket-value">{{ bucket_money(r,'unusable') }}</div></td>
-          <td class="iv-number iv-grand">{{ r.total|iv_qty }}</td>
+          <td class="iv-number iv-qty-cell iv-finished"><b>{{ r.available_finished|iv_qty }}</b><small>EA</small></td>
+          <td class="iv-number iv-qty-cell iv-work"><b>{{ r.available_work|iv_qty }}</b><small>EA</small></td>
+          <td class="iv-number iv-qty-cell iv-available-elsewhere"><b>{{ r.available_elsewhere|iv_qty }}</b><small>EA</small></td>
+          <td class="iv-number iv-qty-cell iv-other"><b>{{ r.other|iv_qty }}</b><small>EA</small>{% if r.location_exception %}<small class="iv-warning">위치 확인 {{ r.location_exception|iv_qty }}</small>{% endif %}</td>
+          <td class="iv-number iv-qty-cell iv-unusable"><b>{{ r.unusable|iv_qty }}</b><small>EA</small></td>
+          <td class="iv-number iv-qty-cell iv-grand"><b>{{ r.total|iv_qty }}</b><small>EA</small></td>
           <td class="iv-number iv-money">{{ money(r) }}</td>
         </tr>
         {% endfor %}
