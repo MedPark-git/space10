@@ -81,13 +81,20 @@ def markdown_rows(content, kind):
     return result
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=3)
 def seed(kind):
-    filename = 'quotes_2026.md.gz.b64' if kind == 'quote_register' else 'orders_2026.md.gz.b64'
+    filenames = {'quote_register':'quotes_2026.md.gz.b64','sales_order':'orders_2026.md.gz.b64',
+                 'shipment_detail':'shipment_detail_2026.tsv.gz.b64'}
+    filename = filenames.get(kind)
+    if not filename:
+        return []
     path = DATA_DIR / filename
     if not path.exists():
         return []
     content = gzip.decompress(base64.b64decode(path.read_text(encoding='ascii'))).decode('utf-8-sig')
+    if kind == 'shipment_detail':
+        from shipment_analysis import parse_shipment_detail
+        return parse_shipment_detail(content, filename)[0] or []
     return markdown_rows(content, kind)
 
 
@@ -132,7 +139,66 @@ def stock_index(stock, refs):
     return result
 
 
-def build_board(orders, quotes, stock, refs, saved, filters):
+def fulfillment_key(customer, erp):
+    return (re.sub(r'\s+', '', clean(customer)).casefold(), clean(erp).upper())
+
+
+def apply_fifo_fulfillment(rows, shipment_rows, scope):
+    """Apply actual sales shipments to customer+ERP demand in chronological FIFO order."""
+    if scope == 'overseas':
+        valid = lambda row: clean(row.get('trade')).upper() == 'T/T' and clean(row.get('shipment_type')) == '해외수주'
+    elif scope == 'domestic':
+        valid = lambda row: clean(row.get('trade')).upper() == 'DOMESTIC' and clean(row.get('shipment_type')) == '국내수주'
+    else:
+        return
+    events = defaultdict(list)
+    for row in rows:
+        row['original_quantity'] = row['quantity']
+        row['fulfilled'] = ZERO
+        row['remaining'] = row['quantity']
+        events[fulfillment_key(row['customer'], row['erp'])].append(
+            (row['date'], 0, row['document'], natural(row['line']), 'demand', row))
+    for shipment in shipment_rows or []:
+        if not valid(shipment) or clean(shipment.get('unit')).upper() != 'EA':
+            continue
+        try:
+            qty = number(shipment.get('quantity'))
+        except ValueError:
+            continue
+        events[fulfillment_key(shipment.get('customer'), shipment.get('erp'))].append(
+            (shipment['date'], 1, shipment.get('document',''), natural(shipment.get('line','')), 'shipment', qty))
+    for key_events in events.values():
+        queue, fulfilled_stack = [], []
+        for _, _, _, _, kind, value in sorted(key_events, key=lambda event: event[:4]):
+            if kind == 'demand':
+                queue.append(value)
+                continue
+            qty = value
+            if qty > 0:
+                while qty > 0 and queue:
+                    target = queue[0]
+                    used = min(qty, target['remaining'])
+                    target['fulfilled'] += used
+                    target['remaining'] -= used
+                    qty -= used
+                    fulfilled_stack.append((target, used))
+                    if target['remaining'] <= 0:
+                        queue.pop(0)
+            elif qty < 0:
+                returned = -qty
+                while returned > 0 and fulfilled_stack:
+                    target, used = fulfilled_stack.pop()
+                    restored = min(returned, used)
+                    target['fulfilled'] -= restored
+                    target['remaining'] += restored
+                    returned -= restored
+                    if target not in queue:
+                        queue.insert(0, target)
+                    if used > restored:
+                        fulfilled_stack.append((target, used - restored))
+
+
+def build_board(orders, quotes, shipments, stock, refs, saved, filters):
     """Build one board from exactly one business document stream."""
     scope = clean(filters.get('scope')) or 'overseas'
     if scope not in {'overseas', 'consignment', 'domestic'}:
@@ -154,10 +220,6 @@ def build_board(orders, quotes, stock, refs, saved, filters):
 
     lines = []
     for source in sources:
-        if (start and source['date'] < start) or (end and source['date'] > end):
-            continue
-        if query and query not in ' '.join(clean(source.get(k)) for k in ('document','customer','owner','erp','item_name','spec')).casefold():
-            continue
         row = dict(source)
         row['quantity'] = number(row['quantity'])
         item_stock = stock_by_erp[row['erp']]
@@ -171,14 +233,28 @@ def build_board(orders, quotes, stock, refs, saved, filters):
         row['prepared'] = number(progress.get('prepared')) if scope == 'overseas' else ZERO
         row['expected_date'] = clean(progress.get('expected_date'))
         row['note'] = clean(progress.get('note'))
-        if scope == 'overseas':
-            row['status'] = clean(progress.get('status')) or ('재고 가능' if item_stock['finished'] + item_stock['waiting'] >= row['quantity'] else '재고 부족')
-            row['shortage'] = max(row['quantity'] - row['prepared'], ZERO)
-        elif scope == 'consignment':
+        row['status'] = clean(progress.get('status'))
+        if scope == 'consignment':
+            row['original_quantity'], row['fulfilled'], row['remaining'] = row['quantity'], ZERO, row['quantity']
             row['status'], row['shortage'] = '재고이동 자료 확인 필요', None
-        else:
-            row['status'], row['shortage'] = '출고·미납 자료 확인 필요', None
         lines.append(row)
+
+    apply_fifo_fulfillment(lines, shipments, scope)
+    visible = []
+    for row in lines:
+        if (start and row['date'] < start) or (end and row['date'] > end):
+            continue
+        if query and query not in ' '.join(clean(row.get(k)) for k in ('document','customer','owner','erp','item_name','spec')).casefold():
+            continue
+        if scope in {'overseas','domestic'} and row['remaining'] <= 0:
+            continue
+        if scope == 'overseas':
+            row['status'] = clean(row.get('status')) or ('재고 가능' if row['finished'] + row['waiting'] >= row['remaining'] else '재고 부족')
+            row['shortage'] = max(row['remaining'] - row['prepared'], ZERO)
+        elif scope == 'domestic':
+            row['status'], row['shortage'] = '미출고 잔량', None
+        visible.append(row)
+    lines = visible
 
     lines.sort(key=lambda row: (row['customer'], row.get('ship_due') or row.get('due') or '9999', row['document'], natural(row['line'])))
     grouped = {}
@@ -193,7 +269,7 @@ def build_board(orders, quotes, stock, refs, saved, filters):
         group['documents'].add(row['document'])
         if row.get('owner'):
             group['owners'].add(row['owner'])
-        group['quantity'] += row['quantity']
+        group['quantity'] += row['remaining']
         group['prepared'] += row['prepared']
         if row['shortage'] is not None:
             group['shortage'] += row['shortage']
@@ -289,6 +365,7 @@ def install_order_fulfillment(app, db):
             abort(400)
         orders, order_import = source('sales_order')
         quotes, quote_import = source('quote_register')
+        shipments, shipment_import = source('shipment_detail')
         scope = clean(request.args.get('scope')) or 'overseas'
         relevant = quotes if scope in {'overseas','consignment'} else orders
         latest_date = max(date.fromisoformat(row['date']) for row in relevant)
@@ -296,9 +373,10 @@ def install_order_fulfillment(app, db):
         end = clean(request.args.get('end')) or latest_date.isoformat()
         all_refs = refs()
         progress = all_refs.get('order_progress', {})
-        board = build_board(orders, quotes, latest('stock'), all_refs, progress,
+        board = build_board(orders, quotes, shipments, latest('stock'), all_refs, progress,
                             {'q':request.args.get('q'),'scope':scope,'start':start,'end':end})
         return render_template('order_fulfillment.html',board=board,start=start,end=end,
-            order_import=order_import,quote_import=quote_import,can_edit=current_user.role in {'admin','editor'})
+            order_import=order_import,quote_import=quote_import,shipment_import=shipment_import,
+            can_edit=current_user.role in {'admin','editor'})
 
     app.add_url_rule('/expiry/order-fulfillment',endpoint='expiry.order_fulfillment',view_func=view,methods=['GET','POST'])
