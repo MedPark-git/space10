@@ -282,12 +282,15 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
                 row['locations'] = [dict(warehouse=w, place=p, bucket=b, quantity=q)
                     for (w,p,b), q in sorted(row.pop('places').items())]
                 if not categories or categories[-1]['name'] != row['category']:
-                    categories.append(dict(name=row['category'], rows=[], **totals()))
+                    categories.append(dict(name=row['category'], rows=[], monthly_shipment=ZERO, **totals()))
                 category = categories[-1]
                 category['rows'].append(row)
                 for field in totals():
                     category[field] += row[field]
+                category['monthly_shipment'] += row['monthly_shipment']
             for category in categories:
+                category['coverage_months'] = (category['available'] / category['monthly_shipment']
+                                               if category['monthly_shipment'] > 0 else None)
                 previous_type = None
                 for row in category['rows']:
                     row['type_start'] = row['type'] != previous_type
@@ -297,6 +300,9 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
                 section_total[field] += group[field]
                 overall[field] += group[field]
         if products:
+            section_total['monthly_shipment'] = sum((g['monthly_shipment'] for g in products), ZERO)
+            section_total['coverage_months'] = (section_total['available'] / section_total['monthly_shipment']
+                                                if section_total['monthly_shipment'] > 0 else None)
             sections.append(dict(key=factory, label=factory_label, products=products, **section_total))
     if overall['total'] != sum((row['quantity'] for row in rows), ZERO):
         raise ValueError('Inventory total mismatch')
@@ -350,7 +356,7 @@ def install_inventory_spec_view(app, db):
             shipment_averages, shipment_meta = shipment_average_index(app, db, shipment_period)
             filters = dict(q=request.args.get('q', ''), warehouses=request.args.getlist('warehouse'),
                 product_factory=request.args.get('product_factory', ''), availability=request.args.get('availability', ''),
-                show_value=request.args.get('show_value') == '1', shipment_period=shipment_period)
+                show_value=True, shipment_period=shipment_period)
             board = build_board(snapshot.payload or [], refs, filters, snapshot.as_of, shipment_averages)
             board['shipment'] = shipment_meta
         return render_template('inventory_specs.html', board=board, factories=FACTORIES,
