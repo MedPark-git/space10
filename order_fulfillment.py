@@ -31,6 +31,11 @@ ORDER_FIELDS = {
     '납기일자':'due','출하예정일자':'ship_due','관리단위':'unit','주문수량':'quantity',
     '관리구분':'management','관리번호':'management_no'
 }
+MOVEMENT_FIELDS = {
+    'No':'no','이동번호':'document','이동일자':'date','품번':'erp','품명':'item_name','규격':'spec',
+    '재고단위':'unit','이동수량':'quantity','출고창고':'from_warehouse','출고장소':'from_location',
+    '입고창고':'to_warehouse','입고장소':'to_location','이동담당자':'owner','LOT No.':'lot'
+}
 
 
 def number(value):
@@ -78,6 +83,44 @@ def markdown_rows(content, kind):
         raise ValueError(' / '.join(errors[:10]) + suffix)
     if not result:
         raise ValueError('적용할 자료가 없습니다.')
+    return result
+
+
+def movement_rows(content):
+    import csv
+    import io
+    raw = list(csv.reader(io.StringIO(content.lstrip('\ufeff')), delimiter='\t'))
+    if not raw:
+        raise ValueError('파일이 비어 있습니다.')
+    header = [clean(value) for value in raw[0]]
+    missing = [name for name in MOVEMENT_FIELDS if name not in header]
+    if missing:
+        raise ValueError('재고이동 필수 열이 없습니다: ' + ', '.join(missing))
+    index = {name:header.index(name) for name in MOVEMENT_FIELDS}
+    result, errors = [], []
+    for row_no, values in enumerate(raw[1:], 2):
+        if not any(clean(value) for value in values):
+            continue
+        if len(values) != len(header):
+            errors.append(f'{row_no}행 열 개수 불일치')
+            continue
+        row = {target:clean(values[index[source]]) for source,target in MOVEMENT_FIELDS.items()}
+        try:
+            date.fromisoformat(row['date'])
+            row['quantity'] = str(number(row['quantity']))
+        except ValueError as error:
+            errors.append(f'{row_no}행: {error}')
+            continue
+        row['line'] = row['no']
+        if not row['document'] or not row['line'] or not row['erp']:
+            errors.append(f'{row_no}행: 이동번호·No·품번이 필요합니다.')
+            continue
+        result.append(row)
+    if errors:
+        more = f' 외 {len(errors)-10}건' if len(errors) > 10 else ''
+        raise ValueError(' / '.join(errors[:10]) + more)
+    if not result:
+        raise ValueError('적용할 재고이동 자료가 없습니다.')
     return result
 
 
@@ -198,7 +241,62 @@ def apply_fifo_fulfillment(rows, shipment_rows, scope):
                         fulfilled_stack.append((target, used - restored))
 
 
-def build_board(orders, quotes, shipments, stock, refs, saved, filters):
+def apply_consignment_movements(rows, movements):
+    """Apply net transfers into each customer-named consignment location."""
+    events = defaultdict(list)
+    for row in rows:
+        row['original_quantity'] = row['quantity']
+        row['fulfilled'] = ZERO
+        row['remaining'] = row['quantity']
+        events[fulfillment_key(row['customer'], row['erp'])].append(
+            (row['date'], 0, row['document'], natural(row['line']), 'demand', row))
+    for movement in movements or []:
+        if clean(movement.get('unit')).upper() != 'EA':
+            continue
+        from_wh = re.sub(r'\s+', '', clean(movement.get('from_warehouse')))
+        to_wh = re.sub(r'\s+', '', clean(movement.get('to_warehouse')))
+        customer, multiplier = '', ZERO
+        if '수탁' in to_wh:
+            customer, multiplier = movement.get('to_location'), Decimal('1')
+        elif '수탁' in from_wh:
+            customer, multiplier = movement.get('from_location'), Decimal('-1')
+        if not customer:
+            continue
+        qty = number(movement.get('quantity')) * multiplier
+        events[fulfillment_key(customer, movement.get('erp'))].append(
+            (movement['date'], 1, movement.get('document',''), natural(movement.get('line','')), 'movement', qty))
+    for key_events in events.values():
+        queue, fulfilled_stack = [], []
+        for _, _, _, _, kind, value in sorted(key_events, key=lambda event:event[:4]):
+            if kind == 'demand':
+                queue.append(value)
+                continue
+            qty = value
+            if qty > 0:
+                while qty > 0 and queue:
+                    target = queue[0]
+                    used = min(qty, target['remaining'])
+                    target['fulfilled'] += used
+                    target['remaining'] -= used
+                    qty -= used
+                    fulfilled_stack.append((target, used))
+                    if target['remaining'] <= 0:
+                        queue.pop(0)
+            elif qty < 0:
+                returned = -qty
+                while returned > 0 and fulfilled_stack:
+                    target, used = fulfilled_stack.pop()
+                    restored = min(returned, used)
+                    target['fulfilled'] -= restored
+                    target['remaining'] += restored
+                    returned -= restored
+                    if target not in queue:
+                        queue.insert(0, target)
+                    if used > restored:
+                        fulfilled_stack.append((target, used-restored))
+
+
+def build_board(orders, quotes, shipments, movements, stock, refs, saved, filters):
     """Build one board from exactly one business document stream."""
     scope = clean(filters.get('scope')) or 'overseas'
     if scope not in {'overseas', 'consignment', 'domestic'}:
@@ -235,11 +333,12 @@ def build_board(orders, quotes, shipments, stock, refs, saved, filters):
         row['note'] = clean(progress.get('note'))
         row['status'] = clean(progress.get('status'))
         if scope == 'consignment':
-            row['original_quantity'], row['fulfilled'], row['remaining'] = row['quantity'], ZERO, row['quantity']
-            row['status'], row['shortage'] = '재고이동 자료 확인 필요', None
+            row['status'], row['shortage'] = '미이동 잔량', None
         lines.append(row)
 
-    if shipments:
+    if scope == 'consignment':
+        apply_consignment_movements(lines, movements)
+    elif shipments:
         apply_fifo_fulfillment(lines, shipments, scope)
     elif scope in {'overseas','domestic'}:
         try:
@@ -257,7 +356,7 @@ def build_board(orders, quotes, shipments, stock, refs, saved, filters):
             continue
         if query and query not in ' '.join(clean(row.get(k)) for k in ('document','customer','owner','erp','item_name','spec')).casefold():
             continue
-        if scope in {'overseas','domestic'} and row['remaining'] <= 0:
+        if row['remaining'] <= 0:
             continue
         if scope == 'overseas':
             row['status'] = clean(row.get('status')) or ('재고 가능' if row['finished'] + row['waiting'] >= row['remaining'] else '재고 부족')
@@ -324,7 +423,7 @@ def install_order_fulfillment(app, db):
             action = request.form.get('action')
             if action == 'import':
                 kind = request.form.get('kind')
-                if kind not in {'quote_register','sales_order'}:
+                if kind not in {'quote_register','sales_order','inventory_movement'}:
                     abort(400)
                 content = request.form.get('pasted','')
                 upload = request.files.get('data_file')
@@ -335,7 +434,7 @@ def install_order_fulfillment(app, db):
                         return redirect(url_for('expiry.order_fulfillment'))
                     content = raw.decode('utf-8-sig')
                 try:
-                    incoming = markdown_rows(content, kind)
+                    incoming = movement_rows(content) if kind == 'inventory_movement' else markdown_rows(content, kind)
                     previous, _ = source(kind)
                     rows = incoming if request.form.get('mode') == 'replace' else merge_rows(previous, incoming)
                 except (ValueError, UnicodeDecodeError) as error:
@@ -347,7 +446,8 @@ def install_order_fulfillment(app, db):
                     notes={'rows':len(rows),'mode':request.form.get('mode','merge')},base_revision='order-fulfillment-v1',
                     as_of=as_of,created_by=current_user.id,committed_at=datetime.now(timezone.utc))
                 db.session.add(record); db.session.commit()
-                flash(f'{"견적등록" if kind=="quote_register" else "주문현황"} {len(rows):,}행을 적용했습니다.', 'success')
+                title = {'quote_register':'견적등록','sales_order':'주문현황','inventory_movement':'재고이동현황'}[kind]
+                flash(f'{title} {len(rows):,}행을 적용했습니다.', 'success')
                 return redirect(url_for('expiry.order_fulfillment'))
             if action == 'progress':
                 key = clean(request.form.get('key'))
@@ -377,6 +477,7 @@ def install_order_fulfillment(app, db):
         orders, order_import = source('sales_order')
         quotes, quote_import = source('quote_register')
         shipments, shipment_import = source('shipment_detail')
+        movements, movement_import = source('inventory_movement')
         scope = clean(request.args.get('scope')) or 'overseas'
         relevant = quotes if scope in {'overseas','consignment'} else orders
         latest_date = max(date.fromisoformat(row['date']) for row in relevant)
@@ -384,10 +485,10 @@ def install_order_fulfillment(app, db):
         end = clean(request.args.get('end')) or latest_date.isoformat()
         all_refs = refs()
         progress = all_refs.get('order_progress', {})
-        board = build_board(orders, quotes, shipments, latest('stock'), all_refs, progress,
+        board = build_board(orders, quotes, shipments, movements, latest('stock'), all_refs, progress,
                             {'q':request.args.get('q'),'scope':scope,'start':start,'end':end})
         return render_template('order_fulfillment.html',board=board,start=start,end=end,
-            order_import=order_import,quote_import=quote_import,shipment_import=shipment_import,
+            order_import=order_import,quote_import=quote_import,shipment_import=shipment_import,movement_import=movement_import,
             can_edit=current_user.role in {'admin','editor'})
 
     app.add_url_rule('/expiry/order-fulfillment',endpoint='expiry.order_fulfillment',view_func=view,methods=['GET','POST'])
