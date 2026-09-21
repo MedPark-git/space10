@@ -14,6 +14,9 @@
 .iv-hero-side{display:grid;gap:8px;justify-items:end}.iv-print-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 .iv-print-actions a{display:inline-block;padding:7px 10px;border:1px solid rgba(255,255,255,.75);border-radius:5px;color:#fff;background:rgba(255,255,255,.12);font-size:12px;font-weight:800}
 .iv-detail-table tfoot th,.iv-detail-table tfoot td{background:#dfeaf1;border-top:2px solid #7893a5;font-weight:900}
+.iv-kpis.iv-six{grid-template-columns:repeat(6,minmax(0,1fr))}.iv-shipment{border-top-color:#28788e!important}.iv-coverage-low{border-top-color:#c34642!important}.iv-coverage-mid{border-top-color:#d28a18!important}
+.iv-demand{font-variant-numeric:tabular-nums;font-weight:900}.iv-coverage{display:inline-block;min-width:56px;padding:4px 6px;border-radius:4px;background:#e7f3ec;color:#235f43;font-weight:900}.iv-coverage.low{background:#fff0f0;color:#a02d35}.iv-coverage.mid{background:#fff5dc;color:#875807}.iv-coverage.none{background:#eef1f3;color:#68737a}
+@media(max-width:1100px){.iv-kpis.iv-six{grid-template-columns:repeat(3,1fr)}}@media(max-width:700px){.iv-kpis.iv-six{grid-template-columns:repeat(2,1fr)}}
 </style>
 <div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260921-07">
   <header class="iv-hero">
@@ -54,6 +57,9 @@
       </div>
     </details>
     <label class="iv-switch"><input type="checkbox" name="show_value" value="1" id="iv-money" {{ 'checked' if board.filters.show_value }}><span>재고금액 보기</span></label>
+    <label>평균 출고 기준
+      <select name="shipment_period"><option value="3" {{ 'selected' if board.filters.shipment_period==3 }}>최근 3개월</option><option value="6" {{ 'selected' if board.filters.shipment_period==6 }}>최근 6개월</option><option value="12" {{ 'selected' if board.filters.shipment_period==12 }}>최근 12개월 범위</option></select>
+    </label>
     <div class="iv-actions"><button type="submit" class="iv-primary">조회</button><a href="{{ url_for('expiry.dashboard') }}">초기화</a></div>
   </form>
 
@@ -66,7 +72,7 @@
     {% endif %}
   {%- endmacro %}
 
-  <section class="iv-kpis">
+  <section class="iv-kpis iv-six">
     {% for key,label in [('total','총재고'),('available','가용재고'),('other','기타'),('unusable','불용')] %}
     <article class="iv-kpi iv-{{ key }}">
       <span>{{ label }}</span>
@@ -84,6 +90,8 @@
       {% endif %}
     </article>
     {% endfor %}
+    <article class="iv-kpi iv-shipment"><span>{{ board.filters.shipment_period }}개월 기준 월평균 출고</span><strong class="iv-demand">{{ '{:,.1f}'.format(board.metrics.monthly_shipment) }}<em>EA</em></strong><small>순출고 · 실제 평균 {{ board.shipment.months|length }}개월</small></article>
+    <article class="iv-kpi iv-shipment {{ 'iv-coverage-low' if board.metrics.coverage_months is not none and board.metrics.coverage_months < 1 else 'iv-coverage-mid' if board.metrics.coverage_months is not none and board.metrics.coverage_months < 3 }}"><span>재고 보유개월</span><strong>{{ '{:,.1f}'.format(board.metrics.coverage_months) if board.metrics.coverage_months is not none else '-' }}<em>개월</em></strong><small>가용재고 ÷ 월평균 출고</small></article>
   </section>
 
   <div class="iv-meta">
@@ -133,6 +141,8 @@
           <span class="iv-mini iv-mini-other">기타 <b>{{ g.other|iv_qty }}</b></span>
           <span class="iv-mini iv-mini-unusable">불용 <b>{{ g.unusable|iv_qty }}</b></span>
           <span class="iv-mini iv-mini-total">총 <b>{{ g.total|iv_qty }}</b> EA</span>
+          <span class="iv-mini">월평균 출고 <b>{{ '{:,.1f}'.format(g.monthly_shipment) }}</b></span>
+          <span class="iv-mini">보유개월 <b>{{ '{:,.1f}'.format(g.coverage_months) if g.coverage_months is not none else '-' }}</b></span>
           {% if board.filters.show_value %}<span class="iv-mini iv-mini-money">{{ money(g) }}</span>{% endif %}
         </div>
       </summary>
@@ -167,6 +177,8 @@
                   <th>기타</th>
                   <th>불용</th>
                   <th>총재고</th>
+                  <th>월평균 출고</th>
+                  <th>보유개월</th>
                   {% if board.filters.show_value %}<th>재고금액</th>{% endif %}
                 </tr>
               </thead>
@@ -192,11 +204,13 @@
                   <td class="iv-number iv-qty-cell iv-other"><b>{{ r.other|iv_qty }}</b><small>EA</small>{% if r.location_exception %}<small class="iv-warning">위치 확인 {{ r.location_exception|iv_qty }}</small>{% endif %}</td>
                   <td class="iv-number iv-qty-cell iv-unusable"><b>{{ r.unusable|iv_qty }}</b><small>EA</small></td>
                   <td class="iv-number iv-qty-cell iv-grand"><b>{{ r.total|iv_qty }}</b><small>EA</small></td>
+                  <td class="iv-number"><b class="iv-demand">{{ '{:,.1f}'.format(r.monthly_shipment) }}</b></td>
+                  <td class="iv-number"><span class="iv-coverage {{ 'low' if r.coverage_months is not none and r.coverage_months < 1 else 'mid' if r.coverage_months is not none and r.coverage_months < 3 else 'none' if r.coverage_months is none }}">{{ '{:,.1f}'.format(r.coverage_months) if r.coverage_months is not none else '-' }}</span></td>
                   {% if board.filters.show_value %}<td class="iv-number iv-value-cell">{{ money(r) }}</td>{% endif %}
                 </tr>
                 {% endfor %}
               </tbody>
-              <tfoot><tr><th colspan="2">{{ c.name }} 소계</th><td class="iv-number">{{ c.available_finished|iv_qty }}</td><td class="iv-number">{{ c.available_work|iv_qty }}</td><td class="iv-number iv-available-total">{{ c.available|iv_qty }}</td><td class="iv-number">{{ c.other|iv_qty }}</td><td class="iv-number">{{ c.unusable|iv_qty }}</td><td class="iv-number">{{ c.total|iv_qty }}</td>{% if board.filters.show_value %}<td class="iv-number">{{ money(c) }}</td>{% endif %}</tr></tfoot>
+              <tfoot><tr><th colspan="2">{{ c.name }} 소계</th><td class="iv-number">{{ c.available_finished|iv_qty }}</td><td class="iv-number">{{ c.available_work|iv_qty }}</td><td class="iv-number iv-available-total">{{ c.available|iv_qty }}</td><td class="iv-number">{{ c.other|iv_qty }}</td><td class="iv-number">{{ c.unusable|iv_qty }}</td><td class="iv-number">{{ c.total|iv_qty }}</td><td colspan="2"></td>{% if board.filters.show_value %}<td class="iv-number">{{ money(c) }}</td>{% endif %}</tr></tfoot>
             </table>
           </div>
         </section>
