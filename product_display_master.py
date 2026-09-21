@@ -124,9 +124,17 @@ def _classify(c):
         return {'name':name,'type':{'5BH':'Hard','5BS':'Soft','5DM':'DM'}[p],'size':f'{int(body[:2])}×{int(body[2:])}mm','category':cat(u)}
     return None
 
-def lookup(icube, fallback_name="", fallback_spec=""):
+def runtime_master(refs):
+    if not isinstance(refs, dict):
+        return None
+    payload = refs.get('product_display', {}).get('master', {})
+    items = payload.get('items') if isinstance(payload, dict) else None
+    return items if isinstance(items, dict) and items else None
+
+def lookup(icube, fallback_name="", fallback_spec="", refs=None):
     code=str(icube or "").strip().upper()
-    item=exact_master().get(code)
+    master=runtime_master(refs)
+    item=(master if master is not None else exact_master()).get(code)
     try:
         item=item or _classify(code)
     except Exception:
