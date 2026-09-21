@@ -1,115 +1,22 @@
 {% extends 'base.html' %}
-{% block page_title %}제품 순서 설정{% endblock %}
-{% block breadcrumb %}공장별 대시보드 표시 순서 관리{% endblock %}
+{% block page_title %}제품 순서·공장 설정{% endblock %}
+{% block breadcrumb %}대시보드 및 유효기간 공장별 표시 기준{% endblock %}
 {% block content %}
-<section class="ref-panel order-panel">
-  <header class="ref-hero blue">
-    <div>
-      <h1>제품 표시 순서</h1>
-      <p>1·2공장 제품과 3공장 제품의 우선순위를 각각 따로 정합니다.</p>
-    </div>
-    {% if snapshot %}<b>기준일 {{ snapshot.as_of }}</b>{% endif %}
-  </header>
-
-  <form method="post" class="order-editor" id="product-order-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="order-help">
-      <span>행을 드래그하거나 순번을 직접 입력한 뒤 저장하세요.</span>
-      <strong>1·2공장 {{ products12|length|num }}개 · 3공장 {{ products3|length|num }}개</strong>
-    </div>
-
-    <div class="order-columns">
-      <section class="order-section">
-        <div class="order-section-head">
-          <h2>1·2공장 제품</h2>
-          <span>{{ products12|length|num }}개</span>
-        </div>
-        <ol class="order-list sortable-order" data-factory="12">
-          {% for name in products12 %}
-          <li draggable="true">
-            <input type="hidden" name="product_name_12" value="{{ name }}">
-            <span class="drag-handle" title="드래그">⋮⋮</span>
-            <input class="order-position" type="number" min="1" value="{{ loop.index }}" aria-label="순번">
-            <b>{{ name }}</b>
-          </li>
-          {% endfor %}
-        </ol>
-      </section>
-
-      <section class="order-section">
-        <div class="order-section-head">
-          <h2>3공장 제품</h2>
-          <span>{{ products3|length|num }}개</span>
-        </div>
-        <ol class="order-list sortable-order" data-factory="3">
-          {% for name in products3 %}
-          <li draggable="true">
-            <input type="hidden" name="product_name_3" value="{{ name }}">
-            <span class="drag-handle" title="드래그">⋮⋮</span>
-            <input class="order-position" type="number" min="1" value="{{ loop.index }}" aria-label="순번">
-            <b>{{ name }}</b>
-          </li>
-          {% endfor %}
-        </ol>
-      </section>
-    </div>
-
-    <div class="order-savebar">
-      <a class="btn" href="{{ url_for('expiry.dashboard') }}">대시보드로</a>
-      <button class="btn primary">순서 저장</button>
-    </div>
-  </form>
-</section>
-
-<script>
-(() => {
-  document.querySelectorAll('.sortable-order').forEach(list => {
-    let dragged = null;
-
-    const renumber = () => {
-      Array.from(list.children).forEach((li, index) => {
-        const input = li.querySelector('.order-position');
-        if (input) input.value = index + 1;
-      });
-    };
-
-    list.addEventListener('dragstart', event => {
-      const li = event.target.closest('li');
-      if (!li) return;
-      dragged = li;
-      li.classList.add('dragging');
-      event.dataTransfer.effectAllowed = 'move';
-    });
-
-    list.addEventListener('dragend', () => {
-      if (dragged) dragged.classList.remove('dragging');
-      dragged = null;
-      renumber();
-    });
-
-    list.addEventListener('dragover', event => {
-      event.preventDefault();
-      if (!dragged) return;
-      const target = event.target.closest('li');
-      if (!target || target === dragged) return;
-      const rect = target.getBoundingClientRect();
-      const after = event.clientY > rect.top + rect.height / 2;
-      list.insertBefore(dragged, after ? target.nextSibling : target);
-    });
-
-    list.addEventListener('change', event => {
-      const input = event.target.closest('.order-position');
-      if (!input) return;
-      const li = input.closest('li');
-      const items = Array.from(list.children);
-      const desired = Math.max(1, Math.min(items.length, parseInt(input.value || '1', 10)));
-      const anchor = list.children[desired - 1];
-      if (anchor && anchor !== li) {
-        list.insertBefore(li, desired - 1 > items.indexOf(li) ? anchor.nextSibling : anchor);
-      }
-      renumber();
-    });
-  });
-})();
-</script>
+<style>
+.po{display:grid;gap:12px}.po-hero{display:flex;justify-content:space-between;align-items:center;padding:16px 18px;border-radius:8px;background:#164d65;color:#fff}.po-hero h1{margin:0;font-size:21px}.po-hero p{margin:4px 0 0;font-size:12px}.po-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.po-section{background:#fff;border:1px solid #bdcdd7;border-radius:7px;overflow:hidden}.po-section h2{display:flex;justify-content:space-between;margin:0;padding:10px 12px;background:#e8f0f5;font-size:16px}.po-list{list-style:none;margin:0;padding:8px;display:grid;gap:5px;min-height:80px}.po-list li{display:grid;grid-template-columns:24px 52px minmax(0,1fr) 105px;gap:6px;align-items:center;padding:7px;border:1px solid #cad6de;border-radius:5px;background:#fff}.po-list li.dragging{opacity:.45}.po-handle{cursor:grab;color:#567080;font-weight:900}.po-position,.po-factory{height:31px;border:1px solid #afc0ca;border-radius:4px}.po-position{text-align:center;width:52px}.po-name{overflow-wrap:anywhere}.po-save{position:sticky;bottom:8px;display:flex;justify-content:flex-end;gap:8px;padding:10px;background:#edf3f6;border:1px solid #bdcdd7;border-radius:7px}.po-btn{padding:8px 12px;border:1px solid #aebfc9;border-radius:5px;background:#fff}.po-primary{background:#17627a;color:#fff;border-color:#17627a;font-weight:800}.po-note{margin:0;padding:9px 11px;background:#fff6dc;border-left:4px solid #d08a19;font-size:12px}@media(max-width:850px){.po-grid{grid-template-columns:1fr}}
+</style>
+<div class="po">
+ <header class="po-hero"><div><h1>제품 순서·공장 설정</h1><p>순서와 공장 구분은 재고현황, 유효기간 화면과 인쇄물에 동일하게 적용됩니다.</p></div>{% if snapshot %}<b>재고 기준일 {{ snapshot.as_of }}</b>{% endif %}</header>
+ <p class="po-note">MedParkAllo, MedParkAlloD, S1-Allo 메디컬, S1-Allo 덴탈은 기본적으로 3공장 제품입니다. 여기서 변경한 선택이 최종 기준으로 저장됩니다.</p>
+ <form method="post" id="po-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="po-grid">
+   {% for factory,title,products in [('12','1·2공장 제품',products12),('3','3공장 제품',products3)] %}
+   <section class="po-section"><h2>{{ title }} <span data-count>{{ products|length|num }}개</span></h2><ol class="po-list" data-list="{{ factory }}">
+    {% for name in products %}<li draggable="true"><input type="hidden" name="product_name" value="{{ name }}"><span class="po-handle">⋮⋮</span><input class="po-position" type="number" min="1" name="product_position" value="{{ loop.index }}" aria-label="순번"><b class="po-name">{{ name }}</b><select class="po-factory" name="product_factory" aria-label="공장"><option value="12" {{ 'selected' if factory=='12' }}>1·2공장</option><option value="3" {{ 'selected' if factory=='3' }}>3공장</option></select></li>{% endfor %}
+   </ol></section>{% endfor %}
+  </div>
+  <div class="po-save"><a class="po-btn" href="{{ url_for('expiry.dashboard') }}">대시보드로</a><button class="po-btn po-primary">순서·공장 저장</button></div>
+ </form>
+</div>
+<script>(()=>{const lists=[...document.querySelectorAll('.po-list')];let dragged=null;function renumber(list){[...list.children].forEach((li,i)=>li.querySelector('.po-position').value=i+1);list.closest('.po-section').querySelector('[data-count]').textContent=list.children.length+'개'}function moveByFactory(li){const value=li.querySelector('.po-factory').value,target=document.querySelector('[data-list="'+value+'"]');target.append(li);lists.forEach(renumber)}lists.forEach(list=>{list.addEventListener('dragstart',e=>{dragged=e.target.closest('li');if(dragged)dragged.classList.add('dragging')});list.addEventListener('dragend',()=>{if(dragged)dragged.classList.remove('dragging');dragged=null;lists.forEach(renumber)});list.addEventListener('dragover',e=>{e.preventDefault();if(!dragged)return;const target=e.target.closest('li');if(!target){list.append(dragged);return}if(target===dragged)return;const r=target.getBoundingClientRect();list.insertBefore(dragged,e.clientY>r.top+r.height/2?target.nextSibling:target)});list.addEventListener('change',e=>{if(e.target.matches('.po-factory'))moveByFactory(e.target.closest('li'));if(e.target.matches('.po-position')){const li=e.target.closest('li'),items=[...list.children],n=Math.max(1,Math.min(items.length,parseInt(e.target.value||'1',10))),anchor=list.children[n-1];if(anchor&&anchor!==li)list.insertBefore(li,n-1>items.indexOf(li)?anchor.nextSibling:anchor);renumber(list)}})});})();</script>
 {% endblock %}
