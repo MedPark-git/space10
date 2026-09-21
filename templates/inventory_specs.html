@@ -3,8 +3,8 @@
 {% block breadcrumb %}공장별 제품 · 구분 · 타입 · 규격별 재고{% endblock %}
 {% block content %}
 {% set capture_mode = request.args.get('capture') == '1' %}
-<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260921-05') }}">
-<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260921-05">
+<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260921-06') }}">
+<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260921-06">
   {% if capture_mode and board %}
   <section class="iv-capture-toolbar">
     <div>
@@ -123,10 +123,13 @@
     </div>
 
     <div class="iv-capture-summary">
-      <table>
+      <table class="iv-capture-detail-table">
         <thead>
           <tr>
-            <th>제품명</th>
+            <th class="iv-cap-product">제품명</th>
+            <th class="iv-cap-category">구분<small>국내/CE/일반수출</small></th>
+            <th class="iv-cap-type">타입</th>
+            <th class="iv-cap-spec">규격(사이즈)</th>
             <th>완제품</th>
             <th>공정중</th>
             <th class="iv-capture-available">가용재고<small>완제품+공정중</small></th>
@@ -137,6 +140,34 @@
         </thead>
         <tbody>
           {% for g in section.products %}
+          {% set product_loop = loop %}
+            {% for c in g.categories %}
+            {% set category_loop = loop %}
+              {% for r in c.rows %}
+              <tr>
+                {% if category_loop.first and loop.first %}
+                <th class="iv-cap-product" rowspan="{{ g.rows|length }}">{{ g.name }}</th>
+                {% endif %}
+                {% if loop.first %}
+                <th class="iv-cap-category" rowspan="{{ c.rows|length }}">{{ c.name }}</th>
+                {% endif %}
+                <td class="iv-cap-type">{{ r.type }}</td>
+                <td class="iv-cap-spec">{{ '유형별 합산' if g.tendon else r.size }}</td>
+                <td>{{ r.available_finished|iv_qty }}</td>
+                <td>{{ r.available_work|iv_qty }}</td>
+                <td class="iv-capture-available"><b>{{ (r.available_finished + r.available_work)|iv_qty }}</b></td>
+                <td>{{ r.other|iv_qty }}</td>
+                <td>{{ r.unusable|iv_qty }}</td>
+                <td class="iv-capture-total"><b>{{ r.total|iv_qty }}</b></td>
+              </tr>
+              {% endfor %}
+            {% endfor %}
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% for g in section.products %}
           <tr>
             <th>{{ g.name }}</th>
             <td>{{ g.available_finished|iv_qty }}</td>
@@ -243,5 +274,5 @@
   {% endif %}
 </div>
 {% if capture_mode %}<script>document.body.classList.add('iv-capture-page');</script>{% endif %}
-<script src="{{ url_for('static', filename='inventory_specs.js', v='20260921-05') }}" defer></script>
+<script src="{{ url_for('static', filename='inventory_specs.js', v='20260921-06') }}" defer></script>
 {% endblock %}
