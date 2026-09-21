@@ -451,5 +451,42 @@ def register_errors(app):
 
 app = create_app()
 
+# Install the recovered authenticated routes and the specification-first inventory
+# dashboard directly on the runtime app. This keeps the live view consistent
+# whether AI Space launches app:app or the Procfile entrypoint.
+from expiry_route_restore import restore_routes
+from inventory_spec_view import install_inventory_spec_view
+restore_routes(app, db, audit, roles)
+install_inventory_spec_view(app, db)
+
+@app.get("/health/inventory-specs-live-20260921-02")
+def inventory_specs_live_readiness():
+    from flask import g
+    from types import SimpleNamespace
+    try:
+        with app.test_request_context("/expiry/dashboard", method="GET", base_url="https://localhost"):
+            g._login_user = SimpleNamespace(
+                is_authenticated=True, is_active=True, is_anonymous=False,
+                role="admin", name="Internal render check",
+                id="inventory-spec-render-check", must_change_password=False,
+            )
+            db.session.execute(text("SET TRANSACTION READ ONLY"))
+            response = app.make_response(app.view_functions["expiry.dashboard"]())
+            body = response.get_data(as_text=True)
+            required = [
+                'data-release="inventory-specs-20260921-02"',
+                "규격(사이즈)", "iv-spec-qty-chips",
+                "완제품", "공정중", "기타가용",
+            ]
+            if response.status_code != 200 or any(marker not in body for marker in required):
+                raise RuntimeError("inventory specification dashboard render check failed")
+            db.session.rollback()
+        return jsonify(status="ok", release="inventory-specs-20260921-02", rendered=True)
+    except Exception as error:
+        db.session.rollback()
+        app.logger.exception("INVENTORY_SPEC_RENDER_CHECK_FAILED")
+        return jsonify(status="error", release="inventory-specs-20260921-02",
+                       error_type=type(error).__name__), 503
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=False)
