@@ -1,0 +1,178 @@
+<style>
+/* Deliberately isolated from the daily dashboard. */
+body.ip-mode {background:#e7edf2}
+body.ip-mode .sidebar,body.ip-mode .app>header {display:none!important}
+body.ip-mode .app {margin:0!important;min-height:0}
+body.ip-mode main {max-width:none;padding:12px!important}
+.ip-toolbar {max-width:1120px;margin:0 auto 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px}
+.ip-toolbar a,.ip-toolbar button {padding:7px 10px;background:white;border:1px solid #aabbc9;border-radius:5px;cursor:pointer;font:inherit}
+.ip-toolbar button.ip-active {background:#164666;color:white}
+.ip-toolbar .ip-status {flex-basis:100%;color:#405a70}
+.ip-toolbar .ip-warning {color:#a34216;font-weight:700}
+.ip-report {font-family:Arial,'Noto Sans CJK KR','Noto Sans KR','Malgun Gothic',sans-serif;color:#193749}
+.ip-sheet {--ip-font:11px;width:1120px;height:790px;box-sizing:border-box;margin:0 auto 16px;padding:18px;background:white;border:1px solid #bdcbd5;overflow:visible}
+.ip-sheet .ip-head {display:flex;justify-content:space-between;align-items:start;border-bottom:2px solid #234c65;padding:0 0 8px;margin:0 0 8px;min-height:48px}
+.ip-sheet h1 {font-size:19px;margin:0;text-align:left;line-height:1.3}
+.ip-head p {margin:2px 0 0;font-size:10px}
+.ip-head .ip-asof {text-align:right;font-size:11px;white-space:nowrap}
+.ip-head .ip-asof strong {display:block;font-size:16px}
+.ip-columns {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start;font-size:var(--ip-font)}
+.ip-column {min-width:0}
+.ip-block {margin:0 0 .55em;break-inside:avoid;border:1px solid #9cafbc}
+.ip-block h2 {margin:0;padding:.24em .45em;background:#e6eff5;border-bottom:1px solid #aebfcb;font-size:1.2em;line-height:1.2;color:#163f5a;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:6px}
+.ip-block h2 span {font-size:.85em;font-weight:800}
+.ip-block h2 small {font-size:.67em;font-weight:500}
+.ip-block .ip-group {display:flex;gap:8px;align-items:center;background:#f4f7f9;padding:.2em .5em;border-bottom:1px solid #bccad4;font-size:1em;line-height:1.1}
+.ip-group .ip-type {font-weight:800;color:#174d70}
+.ip-group .ip-market {border-left:1px solid #aebfcb;padding-left:8px;font-weight:800}
+.ip-report table {width:100%;min-width:0!important;table-layout:fixed;border-collapse:collapse}
+.ip-report col.ip-size {width:28%}
+.ip-report td,.ip-report th {height:auto;white-space:normal;overflow-wrap:anywhere;padding:.22em .3em;border-right:1px solid #bccad4;border-bottom:1px solid #bccad4;font-size:1em;line-height:1.12;text-align:right;vertical-align:middle;font-variant-numeric:tabular-nums}
+.ip-report th {background:#f0f4f7;font-weight:700;color:#385569;font-size:.95em}
+.ip-report td:first-child,.ip-report th:first-child {text-align:left}
+.ip-report tr>*:last-child {border-right:0}
+.ip-report tbody tr:last-child>* {border-bottom:0}
+.ip-report .ip-available {background:#e5f3eb;color:#17563d;font-weight:800}
+.ip-report .ip-total {background:#e8f0f7;font-weight:800}
+.ip-report .ip-foot {margin-top:5px;padding-top:4px;border-top:1px solid #c2ced7;display:flex;justify-content:space-between;font-size:9px;color:#486071}
+.ip-source {position:absolute;left:-20000px;top:0;width:540px;visibility:hidden}
+.ip-nojs {padding:10px;background:#fff3d8}
+@media print {
+ @page {size:A4 landscape;margin:5mm}
+ body.ip-mode {background:white!important}
+ body.ip-mode main {padding:0!important}
+ .ip-toolbar,.ip-source,.ip-nojs {display:none!important}
+ .ip-sheet {width:287mm;height:200mm;border:0;margin:0;padding:2mm;break-after:page;break-inside:avoid;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+ .ip-sheet:last-child {break-after:auto}
+ .ip-sheet .ip-head {min-height:45px}
+}
+</style>
+<div class="ip-toolbar">
+ <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', capture='1') }}">1·2공장</a>
+ <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', capture='1') }}">3공장</a>
+ <button type="button" id="ip-fit" class="ip-active">공장별 한 장 맞춤</button>
+ <button type="button" id="ip-readable">읽기 편한 크기</button>
+ <button type="button" id="ip-print">인쇄 / PDF</button>
+ <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id) }}">일반 재고 화면</a>
+ <span class="ip-status" id="ip-status" role="status">제품 · 국내/CE 구분 · 타입 · 규격별 수량을 빠짐없이 배치합니다.</span>
+</div>
+<div class="ip-report" data-release="inventory-print-20260921-07">
+ {% if board %}
+ {% for section in board.sections %}
+ <div class="ip-source" data-factory="{{ section.label }}" data-date="{{ board.snapshot_date }}" data-total="{{ section.total|iv_qty }}" data-count="{{ section.products|length }}" data-filter="{{ '검색: ' ~ board.filters.q if board.filters.q else '전체 제품' }} / {{ board.filters.warehouses|join(', ') if board.filters.warehouses else '전체 창고' }} / {{ board.filters.availability or '전체 재고구분' }}">
+  {% for g in section.products %}
+   {% for typ, lines in g.rows|groupby('type') %}
+    {% for c in g.categories %}
+     {% set type_rows = c.rows|selectattr('type', 'equalto', typ)|list %}
+     {% for chunk in type_rows|batch(16) %}
+     <article class="ip-block">
+      <h2>{{ g.name }}{% if not loop.first %} <small>계속</small>{% endif %}</h2>
+      <div class="ip-group"><span class="ip-type">{{ typ }}</span><span class="ip-market">{{ c.name }}</span></div>
+      <table>
+       <colgroup><col class="ip-size"><col><col><col><col><col><col></colgroup>
+       <thead><tr><th>규격</th><th>완제품</th><th>공정중</th><th class="ip-available">가용</th><th>기타</th><th>불용</th><th>총재고</th></tr></thead>
+       <tbody>{% for r in chunk %}<tr data-stock-row data-product="{{ g.name }}" data-category="{{ c.name }}" data-type="{{ typ }}" data-spec="{{ r.size }}"><td>{{ '타입별 합산' if g.tendon else r.size }}</td><td>{{ r.available_finished|iv_qty }}</td><td>{{ r.available_work|iv_qty }}</td><td class="ip-available">{{ r.available|iv_qty }}</td><td>{{ r.other|iv_qty }}</td><td>{{ r.unusable|iv_qty }}</td><td class="ip-total">{{ r.total|iv_qty }}</td></tr>{% endfor %}</tbody>
+      </table>
+     </article>
+     {% endfor %}
+    {% endfor %}
+   {% endfor %}
+  {% endfor %}
+ </div>
+ {% endfor %}
+ {% if not board.sections %}<p>선택한 공장에 표시할 재고가 없습니다.</p>{% endif %}
+ {% else %}<p>등록된 ERP 재고가 없습니다.</p>{% endif %}
+ <div id="ip-pages"></div>
+</div>
+<noscript><p class="ip-nojs">인쇄 배치를 위해 JavaScript가 필요합니다. 일반 재고 화면에서 전체 상세정보를 확인해 주세요.</p></noscript>
+<script>
+(() => {
+ 'use strict';
+ document.body.classList.add('ip-mode');
+ const pages = document.getElementById('ip-pages');
+ const sources = [...document.querySelectorAll('.ip-source')];
+ let fit = true;
+ function element(tag, cls, value) {
+  const e = document.createElement(tag); e.className = cls;
+  if (value !== undefined) e.textContent = value;
+  return e;
+ }
+ function sheet(source, number) {
+  const page = element('section', 'ip-sheet');
+  const head = element('div', 'ip-head');
+  const title = element('div', '');
+  title.append(element('h1', '', source.dataset.factory + ' 재고현황'));
+  title.append(element('p', '', '가용 = 완제품 + 공정중 · 단위 EA · ' + source.dataset.filter));
+  const date = element('div', 'ip-asof', '재고 기준일 ' + source.dataset.date);
+  date.append(element('strong', '', '총재고 ' + source.dataset.total + ' EA'));
+  head.append(title,date);
+  const columns = element('div', 'ip-columns');
+  columns.append(element('div','ip-column'),element('div','ip-column'));
+  const foot = element('div','ip-foot');
+  foot.append(element('span','','MEDPARK · 불용 및 공장 위치 예외는 가용에서 제외'),element('span','','' + number));
+  page.append(head, columns, foot); pages.append(page);
+  return page;
+ }
+ function capacity(page) {
+  return page.clientHeight - parseFloat(getComputedStyle(page).paddingTop) - parseFloat(getComputedStyle(page).paddingBottom) - page.querySelector('.ip-head').offsetHeight - page.querySelector('.ip-foot').offsetHeight - 18;
+ }
+ function balance(page, blocks) {
+  const [left,right] = page.querySelectorAll('.ip-column');
+  left.replaceChildren(...blocks); right.replaceChildren();
+  const heights = blocks.map(b => b.getBoundingClientRect().height + parseFloat(getComputedStyle(b).marginBottom));
+  const sum = heights.reduce((a,b)=>a+b,0);
+  let prefix=0, best=0, error=Infinity;
+  for(let i=0;i<=blocks.length;i++) {
+   const difference = Math.abs(sum-2*prefix);
+   if(difference<=error){error=difference;best=i;}
+   prefix += heights[i] || 0;
+  }
+  left.replaceChildren(...blocks.slice(0,best)); right.replaceChildren(...blocks.slice(best));
+  return Math.max(left.getBoundingClientRect().height,right.getBoundingClientRect().height);
+ }
+ function layout() {
+  pages.replaceChildren(); let minFont=11; let count=0;
+  for(const source of sources) {
+   const blocks = [...source.children].map(b=>b.cloneNode(true));
+   let page=sheet(source,1); count++;
+   if(fit) {
+    let font=11, height=balance(page,blocks);
+    for(let i=0;i<8 && height>capacity(page);i++) {
+     font *= Math.min(.96,(capacity(page)-3)/height);
+     page.style.setProperty('--ip-font',font+'px');
+     height=balance(page,blocks);
+    }
+    minFont=Math.min(minFont,font);
+   } else {
+    let colIndex=0, pageNumber=1;
+    for(const block of blocks) {
+     let col=page.querySelectorAll('.ip-column')[colIndex];
+     col.append(block);
+     if(col.getBoundingClientRect().height>capacity(page) && col.children.length>1) {
+      block.remove();colIndex++;
+      if(colIndex>1){page=sheet(source,++pageNumber);count++;colIndex=0;}
+      page.querySelectorAll('.ip-column')[colIndex].append(block);
+     }
+    }
+   }
+  }
+  const status=document.getElementById('ip-status');
+  status.textContent= count+'장 · 좌우 2단 · 제품/구분/타입/규격 및 모든 수량 유지' + (minFont<9.3 ? ' · 항목이 많아 글씨가 작습니다. 확대해서 보거나 ‘읽기 편한 크기’로 여러 장 인쇄할 수 있습니다.' : '');
+  status.classList.toggle('ip-warning',minFont<9.3);
+  document.getElementById('ip-fit').classList.toggle('ip-active',fit);
+  document.getElementById('ip-readable').classList.toggle('ip-active',!fit);
+  // Fit the paper preview horizontally without changing the print dimensions.
+  if(!matchMedia('print').matches) {
+   const zoom=Math.min(1,(document.documentElement.clientWidth-24)/1120);
+   pages.style.zoom=String(zoom);
+  } else pages.style.zoom='1';
+ }
+ document.getElementById('ip-fit').onclick=()=>{fit=true;pages.style.zoom='1';layout();};
+ document.getElementById('ip-readable').onclick=()=>{fit=false;pages.style.zoom='1';layout();};
+ document.getElementById('ip-print').onclick=()=>window.print();
+ window.addEventListener('beforeprint',()=>{pages.style.zoom='1';layout();});
+ window.addEventListener('afterprint',()=>{pages.style.zoom='1';layout();});
+ window.addEventListener('resize',()=>{pages.style.zoom='1';layout();});
+ document.fonts.ready.then(layout);
+})();
+</script>
