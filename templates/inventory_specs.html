@@ -2,13 +2,13 @@
 {% block page_title %}제품 재고 현황{% endblock %}
 {% block breadcrumb %}공장별 제품 · 구분 · 타입 · 규격별 재고{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260921-03') }}">
-<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-release="inventory-specs-20260921-03">
+<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260921-04') }}">
+<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-release="inventory-specs-20260921-04">
   <header class="iv-hero">
     <div>
       <p class="iv-eyebrow">MEDPARK INVENTORY</p>
       <h1>제품 재고 현황</h1>
-      <p>제품 → 구분(국내/CE/일반수출 등) → 타입 → 규격 순서로 재고를 확인합니다.</p>
+      <p>완제품창고 재고 + 공정중창고 재고를 가용재고로 보고, 제품별 상세 재고를 확인합니다.</p>
     </div>
     <div class="iv-date">재고 기준일<strong>{{ board.snapshot_date if board else '-' }}</strong></div>
   </header>
@@ -19,16 +19,16 @@
     <label class="iv-search">검색<input name="q" value="{{ board.filters.q }}" placeholder="제품명, 국내/CE, 타입, 규격"></label>
     <label>제품 공장
       <select name="product_factory">
-        <option value="">전체</option>
-        {% for k,v in factories.items() %}<option value="{{ k }}" {{ 'selected' if k==board.filters.product_factory }}>{{ v }}</option>{% endfor %}
+        <option value="">전체<[REDACTED]>
+        {% for k,v in factories.items() %}<option value="{{ k }}" {{ 'selected' if k==board.filters.product_factory }}>{{ v }}<[REDACTED]>{% endfor %}
       </select>
     </label>
     <label>재고 구분
       <select name="availability">
-        <option value="">전체</option>
-        <option value="available" {{ 'selected' if board.filters.availability=='available' }}>가용</option>
-        <option value="other" {{ 'selected' if board.filters.availability=='other' }}>기타</option>
-        <option value="unusable" {{ 'selected' if board.filters.availability=='unusable' }}>불용</option>
+        <option value="">전체<[REDACTED]>
+        <option value="available" {{ 'selected' if board.filters.availability=='available' }}>가용<[REDACTED]>
+        <option value="other" {{ 'selected' if board.filters.availability=='other' }}>기타<[REDACTED]>
+        <option value="unusable" {{ 'selected' if board.filters.availability=='unusable' }}>불용<[REDACTED]>
       </select>
     </label>
     <details class="iv-warehouse">
@@ -53,10 +53,11 @@
   {%- endmacro %}
 
   <section class="iv-kpis">
-    {% for key,label in [('total','총재고'),('available','가용'),('other','기타'),('unusable','불용')] %}
+    {% for key,label in [('total','총재고'),('available','가용재고'),('other','기타'),('unusable','불용')] %}
     <article class="iv-kpi iv-{{ key }}">
       <span>{{ label }}</span>
       <strong>{{ board.metrics[key]|iv_qty }}<em>EA</em></strong>
+      {% if key=='available' %}<small class="iv-kpi-formula">완제품 + 공정중</small>{% endif %}
       {% if board.filters.show_value %}
       <div class="iv-kpi-money">
         {% if key=='total' %}
@@ -111,7 +112,7 @@
           <span>{{ g.categories|length }}개 구분 · {{ g.rows|length }}개 규격행</span>
         </div>
         <div class="iv-product-totals">
-          <span class="iv-mini iv-mini-available">가용 <b>{{ g.available|iv_qty }}</b></span>
+          <span class="iv-mini iv-mini-available">가용재고 <b>{{ g.available|iv_qty }}</b><small>완제품+공정중</small></span>
           <span class="iv-mini iv-mini-other">기타 <b>{{ g.other|iv_qty }}</b></span>
           <span class="iv-mini iv-mini-unusable">불용 <b>{{ g.unusable|iv_qty }}</b></span>
           <span class="iv-mini iv-mini-total">총 <b>{{ g.total|iv_qty }}</b> EA</span>
@@ -130,7 +131,7 @@
               <small>{{ c.rows|length }}개 규격행</small>
             </div>
             <div class="iv-category-totals">
-              <span>가용 <b>{{ c.available|iv_qty }}</b></span>
+              <span>가용재고 <b>{{ c.available|iv_qty }}</b></span>
               <span>기타 <b>{{ c.other|iv_qty }}</b></span>
               <span>불용 <b>{{ c.unusable|iv_qty }}</b></span>
               <span class="iv-category-total">총 <b>{{ c.total|iv_qty }}</b> EA</span>
@@ -145,7 +146,7 @@
                   <th class="iv-spec-head">규격(사이즈)</th>
                   <th>완제품</th>
                   <th>공정중</th>
-                  <th>기타가용</th>
+                  <th class="iv-available-head">가용재고<small>완제품+공정중</small></th>
                   <th>기타</th>
                   <th>불용</th>
                   <th>총재고</th>
@@ -170,7 +171,7 @@
                   </td>
                   <td class="iv-number iv-qty-cell iv-finished"><b>{{ r.available_finished|iv_qty }}</b><small>EA</small></td>
                   <td class="iv-number iv-qty-cell iv-work"><b>{{ r.available_work|iv_qty }}</b><small>EA</small></td>
-                  <td class="iv-number iv-qty-cell iv-available-elsewhere"><b>{{ r.available_elsewhere|iv_qty }}</b><small>EA</small></td>
+                  <td class="iv-number iv-qty-cell iv-available-total"><b>{{ (r.available_finished + r.available_work)|iv_qty }}</b><small>EA</small></td>
                   <td class="iv-number iv-qty-cell iv-other"><b>{{ r.other|iv_qty }}</b><small>EA</small>{% if r.location_exception %}<small class="iv-warning">위치 확인 {{ r.location_exception|iv_qty }}</small>{% endif %}</td>
                   <td class="iv-number iv-qty-cell iv-unusable"><b>{{ r.unusable|iv_qty }}</b><small>EA</small></td>
                   <td class="iv-number iv-qty-cell iv-grand"><b>{{ r.total|iv_qty }}</b><small>EA</small></td>
@@ -189,10 +190,10 @@
   {% endfor %}
 
   {% if not board.sections %}<section class="iv-empty">조회 조건에 맞는 재고가 없습니다.</section>{% endif %}
-  <p class="iv-footnote">가용 여부는 저장된 창고 분류를 우선 적용합니다. 3공장 제품이 1·2공장 완제품/공정중 위치에 있으면 기타·위치 확인 대상으로 표시합니다.</p>
+  <p class="iv-footnote">가용재고는 완제품창고 재고와 공정중창고 재고의 합계입니다. 불용 분류 재고와 공장 위치 예외는 각각 불용·기타로 표시합니다.</p>
   {% else %}
   <section class="iv-empty">등록된 ERP 재고가 없습니다.</section>
   {% endif %}
 </div>
-<script src="{{ url_for('static', filename='inventory_specs.js', v='20260921-03') }}" defer></script>
+<script src="{{ url_for('static', filename='inventory_specs.js', v='20260921-04') }}" defer></script>
 {% endblock %}
