@@ -14,6 +14,7 @@ from sqlalchemy import select, text
 
 from expiry_engine import FORMATS, InputError, calculate, family_rules, index_mts, iso_date, number, parse_family_rule, parse_paste, stock_scope, summarize
 from product_display_master import lookup as product_display_lookup
+from product_display_admin import register_product_display_admin
 
 
 def make_models(db):
@@ -161,6 +162,8 @@ def register_expiry(app, db, audit, roles):
         summary = summarize(rows)
         summary["scope"] = scope
         warehouses = sorted({r["warehouse"] for r in rows})
+        locations = sorted({(r.get("location") or "").strip() for r in rows}, key=lambda value: (not value, value))
+        summary["filter_locations"] = locations
         statuses = sorted({r["status"] for r in rows})
         q = request.args.get("q", "").strip().casefold()
         bucket = request.args.get("bucket", "")
@@ -187,11 +190,16 @@ def register_expiry(app, db, audit, roles):
                 return unit == "EA" and quantity > 0 and bool(row["error"])
             return True
         selected_warehouses = [value for value in request.args.getlist("warehouse") if value]
+        selected_location_tokens = [value for value in request.args.getlist("location") if value]
+        selected_locations = {
+            "" if value == "__unassigned__" else value
+            for value in selected_location_tokens
+        }
 
         def matches_query(row):
             if not q:
                 return True
-            display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"))
+            display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"), refs=refs)
             values = (
                 row.get("erp"), row.get("icube"), row.get("name"), row.get("spec"),
                 row.get("lot"), row.get("warehouse"), row.get("location"),
@@ -204,14 +212,14 @@ def register_expiry(app, db, audit, roles):
             selected = request.args.get("product_factory", "")
             if selected not in FACTORIES:
                 return True
-            shown = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"))
+            shown = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"), refs=refs)
             return factory_for(row.get("icube") or "", shown.get("name"), row, refs) == selected
 
         filtered = [r for r in rows if
                     (request.args.get("zero") == "1" or number(r["quantity"]) != 0)
                     and in_bucket(r)
                     and (not selected_warehouses or r["warehouse"] in selected_warehouses)
-                    and (not request.args.get("location") or (r.get("location") or "") == request.args["location"])
+                    and (not selected_locations or (r.get("location") or "").strip() in selected_locations)
                     and (not request.args.get("factory") or r["factory"] == request.args["factory"])
                     and (not request.args.get("status") or r["status"] == request.args["status"])
                     and matches_query(r) and matches_product_factory(r)]
@@ -518,7 +526,7 @@ def register_expiry(app, db, audit, roles):
             row = dict(source_row)
             row["availability"], row["availability_source"] = warehouse_classification(row.get("warehouse"), refs)
             row["availability_label"] = availability_labels[row["availability"]]
-            display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"))
+            display = product_display_lookup(row.get("icube"), row.get("name"), row.get("spec"), refs=refs)
             row["display_name"] = display["name"]
             row["display_type"] = display["type"]
             row["display_size"] = display["size"]
@@ -770,7 +778,7 @@ def register_expiry(app, db, audit, roles):
                 if number(raw.get("quantity")) <= 0:
                     continue
                 calc = calculate(raw, indexed, as_of, tuple(refs.get("settings", {}).get("alerts", {}).get("days", [90, 180, 365])))
-                display = product_display_lookup(calc.get("icube"), calc.get("name"), calc.get("spec"))
+                display = product_display_lookup(calc.get("icube"), calc.get("name"), calc.get("spec"), refs=refs)
                 factory = dashboard_product_factory(display["name"], calc)
                 if factory == "3":
                     names3.add(display["name"])
@@ -1169,6 +1177,7 @@ def register_expiry(app, db, audit, roles):
             headers={"Content-Disposition": "attachment; filename=inventory_expiry.csv"},
         )
 
+    register_product_display_admin(bp, db, audit, roles, Reference, references, lock_writes)
     app.register_blueprint(bp)
     app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
     app.config["MAX_FORM_MEMORY_SIZE"] = 10 * 1024 * 1024
