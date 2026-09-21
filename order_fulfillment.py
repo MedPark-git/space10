@@ -242,7 +242,10 @@ def build_board(orders, quotes, shipments, stock, refs, saved, filters):
     if shipments:
         apply_fifo_fulfillment(lines, shipments, scope)
     elif scope in {'overseas','domestic'}:
-        from shipment_fulfillment_seed import FULFILLED
+        try:
+            from shipment_fulfillment_seed import FULFILLED
+        except ImportError:
+            FULFILLED = {}
         for row in lines:
             row['original_quantity'] = row['quantity']
             completed = min(number(FULFILLED.get(row['key'])), row['quantity'])
