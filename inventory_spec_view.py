@@ -44,6 +44,42 @@ def display(value):
     return re.sub(r'\s+', ' ', re.sub(r'\\([~*])', r'\1', clean(value))).replace('*', '×')
 
 
+def product_family(name):
+    """Shared management family so related SKUs stay together across dashboards."""
+    normalized = clean(name).upper().replace(' ', '')
+    if 'ALLO' in normalized:
+        return 'ALLO 계열'
+    # BOSS/S1 are the CE/export display names of the same XB production family.
+    if 'XB' in normalized or normalized in {'BOSS', 'S1'}:
+        return 'XB 계열'
+    rules = [
+        ('XP', 'XP 계열'),
+        ('OSS', 'OSS 계열'), ('DBM', 'DBM 계열'), ('SDERM', 'S DERM 계열'),
+        ('SGEN', 'S GEN 계열'), ('FILL', 'FILL 계열'), ('ADITE', 'ADITE 계열'),
+        ('TENDON', 'TENDON 계열'),
+    ]
+    for token, label in rules:
+        if token in normalized:
+            return label
+    return clean(name) or '기타 제품'
+
+
+def management_status(available, monthly_shipment, coverage_months, location_exception=ZERO):
+    if location_exception > 0:
+        return 'location', '위치 확인'
+    if monthly_shipment > 0 and available <= 0:
+        return 'stockout', '가용재고 없음'
+    if coverage_months is not None and coverage_months < 1:
+        return 'critical', '긴급 생산검토'
+    if coverage_months is not None and coverage_months < 3:
+        return 'watch', '생산계획 확인'
+    if coverage_months is not None and coverage_months > 12:
+        return 'excess', '과다재고 확인'
+    if monthly_shipment <= 0 and available > 0:
+        return 'no_demand', '출고이력 없음'
+    return 'normal', '적정'
+
+
 def place_key(value):
     return re.sub(r'[\s_]+', '', clean(value)).casefold()
 
@@ -201,7 +237,7 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
         factory = factory_for(code, name, raw, refs)
         bucket, physical, exception = stock_bucket(raw, factory, refs)
         cost_data = costs.get(code)
-        source_rows.append(dict(name=name, type=type_name, size=size, category=category,
+        source_rows.append(dict(name=name, family=product_family(name), type=type_name, size=size, category=category,
             original_spec=original_spec, erp=erp, icube=code, mapped=bool(shown.get('mapped')),
             factory=factory, quantity=quantity, warehouse=clean(raw.get('warehouse')) or '창고 미지정',
             place=clean(raw.get('location')) or '장소 미지정', bucket=bucket, physical=physical,
@@ -217,7 +253,7 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
         if selected['availability'] and row['bucket'] != selected['availability']:
             continue
         if selected['q']:
-            haystack = ' '.join(clean(row[key]) for key in ('name','type','size','category','erp','icube','original_spec','warehouse','place')).casefold()
+            haystack = ' '.join(clean(row[key]) for key in ('name','family','type','size','category','erp','icube','original_spec','warehouse','place')).casefold()
             if selected['q'].casefold() not in haystack:
                 continue
         rows.append(row)
@@ -226,7 +262,7 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
     unmapped = set()
     for row in rows:
         group = groups.setdefault((row['factory'], row['name']), dict(name=row['name'], factory=row['factory'],
-            tendon=row['name'].casefold() == 'tendon', lines={}, monthly_shipment=ZERO,
+            family=row['family'], tendon=row['name'].casefold() == 'tendon', lines={}, monthly_shipment=ZERO,
             shipment_erps=set(), **totals()))
         add_total(group, row)
         if row['erp'] and row['erp'] not in group['shipment_erps']:
@@ -263,10 +299,14 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
             group['id'] = f'product-{factory}-{index}'
             group.pop('shipment_erps', None)
             group['coverage_months'] = group['available'] / group['monthly_shipment'] if group['monthly_shipment'] > 0 else None
+            group['management_key'], group['management_label'] = management_status(
+                group['available'], group['monthly_shipment'], group['coverage_months'], group['location_exception'])
             lines = list(group.pop('lines').values())
             for line in lines:
                 line.pop('shipment_erps', None)
                 line['coverage_months'] = line['available'] / line['monthly_shipment'] if line['monthly_shipment'] > 0 else None
+                line['management_key'], line['management_label'] = management_status(
+                    line['available'], line['monthly_shipment'], line['coverage_months'], line['location_exception'])
             lines.sort(key=lambda row: (category_key(row['category']), natural(row['type']), natural(row['size'])))
             group['rows'] = lines
             group['specs'] = sorted({row['size'] for row in lines if row['size'] not in {'', '-'}}, key=natural)
@@ -306,7 +346,27 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
             section_total['monthly_shipment'] = sum((g['monthly_shipment'] for g in products), ZERO)
             section_total['coverage_months'] = (section_total['available'] / section_total['monthly_shipment']
                                                 if section_total['monthly_shipment'] > 0 else None)
-            sections.append(dict(key=factory, label=factory_label, products=products, **section_total))
+            families = []
+            family_index = {}
+            for group in products:
+                family = family_index.get(group['family'])
+                if family is None:
+                    family = dict(label=group['family'], products=[], monthly_shipment=ZERO,
+                                  status_counts={}, **totals())
+                    family_index[group['family']] = family
+                    families.append(family)
+                family['products'].append(group)
+                family['monthly_shipment'] += group['monthly_shipment']
+                family['status_counts'][group['management_key']] = family['status_counts'].get(group['management_key'], 0) + 1
+                for field in totals():
+                    family[field] += group[field]
+            family_rank = {'XB 계열': 0, 'XP 계열': 1, 'ALLO 계열': 2, 'OSS 계열': 3,
+                           'DBM 계열': 4, 'S DERM 계열': 5, 'S GEN 계열': 6}
+            families.sort(key=lambda family: (family_rank.get(family['label'], 99), natural(family['label'])))
+            for family in families:
+                family['coverage_months'] = (family['available'] / family['monthly_shipment']
+                                             if family['monthly_shipment'] > 0 else None)
+            sections.append(dict(key=factory, label=factory_label, products=products, families=families, **section_total))
     if overall['total'] != sum((row['quantity'] for row in rows), ZERO):
         raise ValueError('Inventory total mismatch')
     if overall['total'] != overall['available'] + overall['other'] + overall['unusable']:
@@ -319,10 +379,15 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
                 raise ValueError('Missing specification label')
     overall['monthly_shipment'] = sum((group['monthly_shipment'] for section in sections for group in section['products'] if group['monthly_shipment'] > 0), ZERO)
     overall['coverage_months'] = overall['available'] / overall['monthly_shipment'] if overall['monthly_shipment'] > 0 else None
+    management = {key: [] for key in ('stockout','critical','watch','excess','no_demand','location')}
+    for section in sections:
+        for group in section['products']:
+            if group['management_key'] in management:
+                management[group['management_key']].append(group)
     return dict(filters=selected, sections=sections, metrics=overall, warehouses=warehouses,
                 invalid_rows=invalid_rows, excluded_rows=excluded_rows, missing_cost=len(missing_cost),
                 unmapped=len(unmapped), source_rows=len(rows), snapshot_date=snapshot_date,
-                product_count=sum(len(section['products']) for section in sections))
+                product_count=sum(len(section['products']) for section in sections), management=management)
 
 
 def install_inventory_spec_view(app, db):
