@@ -12,8 +12,10 @@ from sqlalchemy import text
 
 from app import app, db, audit, roles
 from expiry_route_restore import restore_routes
+from inventory_spec_view import install_inventory_spec_view
 
 restore_routes(app, db, audit, roles)
+install_inventory_spec_view(app, db)
 
 
 @app.errorhandler(500)
@@ -24,13 +26,12 @@ def safe_server_error(error):
         app.logger.error('Request failure reference=%s', error_id,
                          exc_info=(type(original), original, original.__traceback__))
     db.session.rollback()
-    # Independent of the shared navigation, so an error page cannot fail recursively.
     return render_template_string(
         '<!doctype html><html lang="ko"><meta charset="utf-8">'
         '<title>Request error</title><body style="font-family:sans-serif;padding:40px">'
-        '<h1>\uc694\uccad\uc744 \ucc98\ub9ac\ud558\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4.</h1>'
-        '<p>\uc624\ub958 \ud655\uc778 \ubc88\ud638: {{ error_id }}</p>'
-        '<a href="/expiry/dashboard">\uc7ac\uace0 \ub300\uc2dc\ubcf4\ub4dc</a>'
+        '<h1>요청을 처리하지 못했습니다.</h1>'
+        '<p>오류 확인 번호: {{ error_id }}</p>'
+        '<a href="/expiry/dashboard">재고 대시보드</a>'
         '</body></html>', error_id=error_id), 500
 
 
@@ -53,7 +54,6 @@ def verify_authenticated_get_views():
     passed, failures = 0, []
     for path, endpoint, values in checks:
         with app.test_request_context(path, method='GET', base_url='https://localhost'):
-            # Test-only identity on this local context, never a user record/cookie.
             g._login_user = SimpleNamespace(
                 is_authenticated=True, is_active=True, is_anonymous=False,
                 role='admin', name='Internal render check', id='render-check-not-an-account',
@@ -67,12 +67,16 @@ def verify_authenticated_get_views():
                 body = response.get_data(as_text=True)
                 if 'Internal Server Error' in body or '<title>Request error</title>' in body:
                     raise RuntimeError(f'{endpoint}: error document returned')
-                if endpoint == 'expiry.dashboard' and '<details class="product-stock-group"' not in body:
-                    raise RuntimeError('Dashboard rendered without product stock groups')
+                if endpoint == 'expiry.dashboard':
+                    if 'data-release="inventory-specs-20260921-01"' not in body:
+                        raise RuntimeError('Dashboard release marker missing')
+                    if '규격(사이즈)' not in body:
+                        raise RuntimeError('Specification column missing')
+                    if '<details class="product-stock-group"' not in body:
+                        raise RuntimeError('Dashboard rendered without product stock groups')
                 passed += 1
                 print(f'RECOVERY_RENDER_OK {path} status=200', flush=True)
             except Exception as error:
-                # No business data in the public readiness response.
                 failures.append({'path': path, 'error_type': type(error).__name__})
                 app.logger.exception('RECOVERY_RENDER_FAILED %s', path)
             finally:
@@ -84,7 +88,6 @@ def verify_anonymous_protection():
     paths = ['/expiry/dashboard', '/expiry/product-order', '/expiry/unit-costs',
              '/expiry/', '/expiry/master-data']
     passed = 0
-    # A separate anonymous client. No credentials or real user cookies are used.
     with app.test_client() as client:
         for path in paths:
             response = client.get(path, base_url='https://localhost', follow_redirects=False)
@@ -95,10 +98,8 @@ def verify_anonymous_protection():
     return {'passed': passed, 'total': len(paths)}
 
 
-# Register before test_client makes its first request. This URL is unique to this
-# release; a 200 here requires the signed-in checks and anonymous guards to pass.
-app.add_url_rule('/health/recovery-routes-20260918-03',
-                 endpoint='recovery_readiness',
+app.add_url_rule('/health/inventory-specs-20260921-01',
+                 endpoint='inventory_spec_readiness',
                  view_func=lambda: health_with_render_verification(), methods=['GET'])
 
 app.config['RECOVERY_RENDER_REPORT'] = verify_authenticated_get_views()
@@ -116,7 +117,7 @@ def health_with_render_verification():
                   authenticated_page_checks=render['passed'],
                   authenticated_page_checks_total=render['total'],
                   anonymous_access_checks=auth['passed'],
-                  recovery_revision='routes-20260918-03',
+                  recovery_revision='inventory-specs-20260921-01',
                   render_failures=render['failures'])
     if not passed:
         result.update(status='error', application_ready=False)
