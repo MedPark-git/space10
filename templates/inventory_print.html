@@ -22,11 +22,12 @@ body.ip-mode main {max-width:none;padding:12px!important}
 .ip-block h2 {margin:0;padding:.24em .45em;background:#e6eff5;border-bottom:1px solid #aebfcb;font-size:1.2em;line-height:1.2;color:#163f5a;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:6px}
 .ip-block h2 span {font-size:.85em;font-weight:800}
 .ip-block h2 small {font-size:.67em;font-weight:500}
+.ip-block .ip-product-metrics {margin-left:auto;text-align:right;font-size:.68em;font-weight:700;white-space:nowrap}
 .ip-block .ip-group {display:flex;gap:8px;align-items:center;background:#f4f7f9;padding:.2em .5em;border-bottom:1px solid #bccad4;font-size:1em;line-height:1.1}
 .ip-group .ip-type {font-weight:800;color:#174d70}
 .ip-group .ip-market {border-left:1px solid #aebfcb;padding-left:8px;font-weight:800}
 .ip-report table {width:100%;min-width:0!important;table-layout:fixed;border-collapse:collapse}
-.ip-report col.ip-size {width:28%}
+.ip-report col.ip-size {width:17%}.ip-report col.ip-money {width:13%}
 .ip-report td,.ip-report th {height:auto;white-space:normal;overflow-wrap:anywhere;padding:.22em .3em;border-right:1px solid #bccad4;border-bottom:1px solid #bccad4;font-size:1em;line-height:1.12;text-align:right;vertical-align:middle;font-variant-numeric:tabular-nums}
 .ip-report th {background:#f0f4f7;font-weight:700;color:#385569;font-size:.95em}
 .ip-report td:first-child,.ip-report th:first-child {text-align:left}
@@ -49,32 +50,32 @@ body.ip-mode main {max-width:none;padding:12px!important}
 }
 </style>
 <div class="ip-toolbar">
- <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', capture='1') }}">1·2공장</a>
- <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', capture='1') }}">3공장</a>
+ <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period if board else 6, capture='1') }}">1·2공장</a>
+ <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period if board else 6, capture='1') }}">3공장</a>
  <button type="button" id="ip-fit" class="ip-active">공장별 한 장 맞춤</button>
  <button type="button" id="ip-readable">읽기 편한 크기</button>
  <button type="button" id="ip-print">인쇄 / PDF</button>
  <a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id) }}">일반 재고 화면</a>
  <span class="ip-status" id="ip-status" role="status">제품 · 국내/CE 구분 · 타입 · 규격별 수량을 빠짐없이 배치합니다.</span>
 </div>
-<div class="ip-report" data-release="inventory-print-20260921-07">
+<div class="ip-report" data-release="inventory-print-20260921-08">
  {% if board %}
  {% for section in board.sections %}
- <div class="ip-source" data-factory="{{ section.label }}" data-date="{{ board.snapshot_date }}" data-total="{{ section.total|iv_qty }}" data-count="{{ section.products|length }}" data-filter="{{ '검색: ' ~ board.filters.q if board.filters.q else '전체 제품' }} / {{ board.filters.warehouses|join(', ') if board.filters.warehouses else '전체 창고' }} / {{ board.filters.availability or '전체 재고구분' }}">
+ <div class="ip-source" data-factory="{{ section.label }}" data-date="{{ board.snapshot_date }}" data-total="{{ section.total|iv_qty }}" data-available="{{ section.available|iv_qty }}" data-average="{{ '{:,.1f}'.format(section.monthly_shipment) }}" data-coverage="{{ '{:,.1f}'.format(section.coverage_months) if section.coverage_months is not none else '-' }}" data-value="{{ section.value|iv_won }}" data-period="{{ board.filters.shipment_period }}" data-count="{{ section.products|length }}" data-filter="{{ '검색: ' ~ board.filters.q if board.filters.q else '전체 제품' }} / {{ board.filters.warehouses|join(', ') if board.filters.warehouses else '전체 창고' }} / {{ board.filters.availability or '전체 재고구분' }}">
   {% for g in section.products %}
    {% for typ, lines in g.rows|groupby('type') %}
     {% for c in g.categories %}
      {% set type_rows = c.rows|selectattr('type', 'equalto', typ)|list %}
      {% for chunk in type_rows|batch(16) %}
      <article class="ip-block">
-      <h2>{{ g.name }}{% if not loop.first %} <small>계속</small>{% endif %}</h2>
+      <h2><span>{{ g.name }}{% if not loop.first %} <small>계속</small>{% endif %}</span><span class="ip-product-metrics">가용 {{ g.available|iv_qty }} · 월평균 {{ '{:,.1f}'.format(g.monthly_shipment) }} · 보유 {{ '{:,.1f}'.format(g.coverage_months) if g.coverage_months is not none else '-' }}개월 · {{ g.value|iv_won }}원{% if g.missing_quantity %}*{% endif %}</span></h2>
       <div class="ip-group"><span class="ip-type">{{ typ }}</span><span class="ip-market">{{ c.name }}</span></div>
       <table>
-       <colgroup><col class="ip-size"><col><col><col><col><col><col></colgroup>
-       <thead><tr><th>규격</th><th>완제품</th><th>공정중</th><th class="ip-available">가용</th><th>기타</th><th>불용</th><th>총재고</th></tr></thead>
-       {% set sub=namespace(finished=0,work=0,available=0,other=0,unusable=0,total=0) %}
-       <tbody>{% for r in chunk %}{% set sub.finished=sub.finished+r.available_finished %}{% set sub.work=sub.work+r.available_work %}{% set sub.available=sub.available+r.available %}{% set sub.other=sub.other+r.other %}{% set sub.unusable=sub.unusable+r.unusable %}{% set sub.total=sub.total+r.total %}<tr data-stock-row data-product="{{ g.name }}" data-category="{{ c.name }}" data-type="{{ typ }}" data-spec="{{ r.size }}"><td>{{ '타입별 합산' if g.tendon else r.size }}</td><td>{{ r.available_finished|iv_qty }}</td><td>{{ r.available_work|iv_qty }}</td><td class="ip-available">{{ r.available|iv_qty }}</td><td>{{ r.other|iv_qty }}</td><td>{{ r.unusable|iv_qty }}</td><td class="ip-total">{{ r.total|iv_qty }}</td></tr>{% endfor %}</tbody>
-       <tfoot><tr><th>소계</th><td>{{ sub.finished|iv_qty }}</td><td>{{ sub.work|iv_qty }}</td><td class="ip-available">{{ sub.available|iv_qty }}</td><td>{{ sub.other|iv_qty }}</td><td>{{ sub.unusable|iv_qty }}</td><td class="ip-total">{{ sub.total|iv_qty }}</td></tr></tfoot>
+       <colgroup><col class="ip-size"><col><col><col><col><col><col><col><col><col class="ip-money"></colgroup>
+       <thead><tr><th>규격</th><th>완제품</th><th>공정중</th><th class="ip-available">가용</th><th>기타</th><th>불용</th><th>총재고</th><th>{{ board.filters.shipment_period }}개월<br>월평균</th><th>보유<br>개월</th><th>재고금액</th></tr></thead>
+       {% set sub=namespace(finished=0,work=0,available=0,other=0,unusable=0,total=0,average=0,value=0,missing=0) %}
+       <tbody>{% for r in chunk %}{% set sub.finished=sub.finished+r.available_finished %}{% set sub.work=sub.work+r.available_work %}{% set sub.available=sub.available+r.available %}{% set sub.other=sub.other+r.other %}{% set sub.unusable=sub.unusable+r.unusable %}{% set sub.total=sub.total+r.total %}{% set sub.average=sub.average+r.monthly_shipment %}{% set sub.value=sub.value+r.value %}{% set sub.missing=sub.missing+r.missing_quantity %}<tr data-stock-row data-product="{{ g.name }}" data-category="{{ c.name }}" data-type="{{ typ }}" data-spec="{{ r.size }}"><td>{{ '타입별 합산' if g.tendon else r.size }}</td><td>{{ r.available_finished|iv_qty }}</td><td>{{ r.available_work|iv_qty }}</td><td class="ip-available">{{ r.available|iv_qty }}</td><td>{{ r.other|iv_qty }}</td><td>{{ r.unusable|iv_qty }}</td><td class="ip-total">{{ r.total|iv_qty }}</td><td>{{ '{:,.1f}'.format(r.monthly_shipment) }}</td><td>{{ '{:,.1f}'.format(r.coverage_months) if r.coverage_months is not none else '-' }}</td><td>{{ r.value|iv_won }}{% if r.missing_quantity %}*{% endif %}</td></tr>{% endfor %}</tbody>
+       <tfoot><tr><th>소계</th><td>{{ sub.finished|iv_qty }}</td><td>{{ sub.work|iv_qty }}</td><td class="ip-available">{{ sub.available|iv_qty }}</td><td>{{ sub.other|iv_qty }}</td><td>{{ sub.unusable|iv_qty }}</td><td class="ip-total">{{ sub.total|iv_qty }}</td><td>{{ '{:,.1f}'.format(sub.average) }}</td><td>{{ '{:,.1f}'.format(sub.available/sub.average) if sub.average>0 else '-' }}</td><td>{{ sub.value|iv_won }}{% if sub.missing %}*{% endif %}</td></tr></tfoot>
       </table>
      </article>
      {% endfor %}
@@ -105,14 +106,15 @@ body.ip-mode main {max-width:none;padding:12px!important}
   const head = element('div', 'ip-head');
   const title = element('div', '');
   title.append(element('h1', '', source.dataset.factory + ' 재고현황'));
-  title.append(element('p', '', '가용 = 완제품 + 공정중 · 단위 EA · ' + source.dataset.filter));
+  title.append(element('p', '', '가용 = 완제품 + 공정중 · 출고 평균 ' + source.dataset.period + '개월 기준 · 단위 EA · ' + source.dataset.filter));
   const date = element('div', 'ip-asof', '재고 기준일 ' + source.dataset.date);
-  date.append(element('strong', '', '총재고 ' + source.dataset.total + ' EA'));
+  date.append(element('strong', '', '가용 ' + source.dataset.available + ' EA · 보유 ' + source.dataset.coverage + '개월'));
+  date.append(element('span', '', '월평균 ' + source.dataset.average + ' EA · 재고금액 ' + source.dataset.value + '원'));
   head.append(title,date);
   const columns = element('div', 'ip-columns');
   columns.append(element('div','ip-column'),element('div','ip-column'));
   const foot = element('div','ip-foot');
-  foot.append(element('span','','MEDPARK · 불용 및 공장 위치 예외는 가용에서 제외'),element('span','','' + number));
+  foot.append(element('span','','MEDPARK · * 원가 미등록 수량 포함 · 불용 및 공장 위치 예외는 가용에서 제외'),element('span','','' + number));
   page.append(head, columns, foot); pages.append(page);
   return page;
  }
