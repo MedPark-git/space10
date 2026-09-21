@@ -342,6 +342,8 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
 
     lines = []
     for source in sources:
+        if (start and source['date'] < start) or (end and source['date'] > end):
+            continue
         row = dict(source)
         row['quantity'] = number(row['quantity'])
         item_stock = stock_by_erp[row['erp']]
@@ -375,13 +377,7 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
             completed = min(number(FULFILLED.get(row['key'])), row['quantity'])
             row['fulfilled'] = completed
             row['remaining'] = row['quantity'] - completed
-    period_lines = []
-    for row in lines:
-        if (start and row['date'] < start) or (end and row['date'] > end):
-            continue
-        if row['remaining'] <= 0:
-            continue
-        period_lines.append(row)
+    period_lines = [row for row in lines if row['remaining'] > 0]
     if scope == 'overseas':
         allocate_waiting_stock(period_lines, stock_by_erp)
     visible = []
@@ -460,6 +456,33 @@ def install_order_fulfillment(app, db):
               AND expanded.item->'data'->>'erp' = ANY(CAST(:erps AS text[]))
         """), {'snapshot_id': snapshot_id, 'erps': sorted(erps)}).scalars())
 
+    def shipment_rows(erps, start, end, trade):
+        """Read only shipment rows that can affect the current board."""
+        import_id = db.session.scalar(select(Import.id).where(
+            Import.kind == 'shipment_detail', Import.committed_at.is_not(None)
+        ).order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(1))
+        if not import_id:
+            rows = seed('shipment_detail')
+            return ([row for row in rows
+                     if clean(row.get('erp')) in erps
+                     and (not start or row['date'] >= start)
+                     and (not end or row['date'] <= end)
+                     and clean(row.get('trade')).upper() == trade], False)
+        if not erps:
+            return [], True
+        rows = list(db.session.execute(text("""
+            SELECT expanded.item
+            FROM expiry_imports AS source
+            CROSS JOIN LATERAL json_array_elements(source.payload) AS expanded(item)
+            WHERE source.id = :import_id
+              AND expanded.item->>'erp' = ANY(CAST(:erps AS text[]))
+              AND expanded.item->>'trade' = :trade
+              AND (:start = '' OR expanded.item->>'date' >= :start)
+              AND (:end = '' OR expanded.item->>'date' <= :end)
+        """), {'import_id': import_id, 'erps': sorted(erps), 'trade': trade,
+                'start': start or '', 'end': end or ''}).scalars())
+        return rows, True
+
     def refs():
         result = {}
         for row in db.session.scalars(select(Reference).order_by(Reference.kind, Reference.key)):
@@ -521,7 +544,6 @@ def install_order_fulfillment(app, db):
         order_import = quote_import = shipment_import = movement_import = False
         if scope == 'overseas':
             quotes, quote_import = source('quote_register')
-            shipments, shipment_import = source('shipment_detail')
             order_import = import_exists('sales_order')
             movement_import = import_exists('inventory_movement')
         elif scope == 'consignment':
@@ -531,7 +553,6 @@ def install_order_fulfillment(app, db):
             shipment_import = import_exists('shipment_detail')
         else:
             orders, order_import = source('sales_order')
-            shipments, shipment_import = source('shipment_detail')
             quote_import = import_exists('quote_register')
             movement_import = import_exists('inventory_movement')
         relevant = quotes if scope in {'overseas','consignment'} else orders
@@ -542,6 +563,9 @@ def install_order_fulfillment(app, db):
         progress = all_refs.get('order_progress', {})
         needed_erps = {clean(row.get('erp')) for row in relevant
                        if (not start or row['date'] >= start) and (not end or row['date'] <= end)}
+        if scope in {'overseas', 'domestic'}:
+            shipments, shipment_import = shipment_rows(
+                needed_erps, start, end, 'T/T' if scope == 'overseas' else 'DOMESTIC')
         board = build_board(orders, quotes, shipments, movements, stock_rows(needed_erps), all_refs, progress,
                             {'q':request.args.get('q'),'scope':scope,'start':start,'end':end})
         return render_template('order_fulfillment.html',board=board,start=start,end=end,
