@@ -3,10 +3,13 @@ import csv
 import io
 import re
 import uuid
+import base64
+import gzip
 from calendar import monthrange
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from flask import Response, abort, flash, redirect, render_template, request, url_for
@@ -19,6 +22,8 @@ from shipment_seed import ROWS as SEED_ROWS
 
 ZERO = Decimal('0')
 MAX_FILE_SIZE = 4 * 1024 * 1024
+DETAIL_HEADER = ['출고일자','출고번호','순번','고객','납품처','거래구분','출고구분','과세구분','단가구분',
+                 '환율','배송방법','담당자','비고(건)','품번','품명','규격','관리단위','출고수량']
 
 
 def number(value):
@@ -48,6 +53,14 @@ def parse_shipments(content, filename=''):
         delimiter = '\t' if '\t' in lines[0] or filename.lower().endswith('.tsv') else ','
         raw = list(csv.reader(io.StringIO(content), delimiter=delimiter))
     header = [clean(value) for value in raw[0]]
+    if header == DETAIL_HEADER:
+        detail, negative = parse_shipment_detail(content, filename)
+        grouped = defaultdict(Decimal)
+        for row in detail:
+            grouped[(date.fromisoformat(row['date']), row['erp'])] += number(row['quantity'])
+        rows = [dict(date=day.isoformat(), erp=erp, quantity=str(quantity))
+                for (day, erp), quantity in sorted(grouped.items())]
+        return rows, negative
     if header != ['출고일자', '품번', '출고수량']:
         raise ValueError('첫 행의 열 순서가 출고일자·품번·출고수량과 일치해야 합니다.')
     grouped, errors, negative = defaultdict(Decimal), [], 0
@@ -78,7 +91,49 @@ def parse_shipments(content, filename=''):
     return rows, negative
 
 
+def parse_shipment_detail(content, filename=''):
+    """Parse the ERP detailed shipment export used to close customer orders."""
+    content = content.lstrip('\ufeff')
+    lines = [line for line in content.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError('파일이 비어 있습니다.')
+    delimiter = '\t' if '\t' in lines[0] or filename.lower().endswith(('.tsv','.txt')) else ','
+    raw = list(csv.reader(io.StringIO(content), delimiter=delimiter))
+    header = [clean(value) for value in raw[0]]
+    if header != DETAIL_HEADER:
+        return None, 0
+    result, errors, negative = [], [], 0
+    for line_no, values in enumerate(raw[1:], 2):
+        if len(values) != len(DETAIL_HEADER):
+            errors.append(f'{line_no}행: 열이 {len(values)}개입니다.')
+            continue
+        source = dict(zip(DETAIL_HEADER, values))
+        try:
+            shipped = date.fromisoformat(clean(source['출고일자']))
+            quantity = number(source['출고수량'])
+            if not clean(source['출고번호']) or not clean(source['순번']) or not clean(source['품번']):
+                raise ValueError('출고번호·순번·품번이 필요합니다.')
+        except (ValueError, TypeError) as error:
+            errors.append(f'{line_no}행: {error}')
+            continue
+        negative += quantity < 0
+        result.append(dict(date=shipped.isoformat(), document=clean(source['출고번호']),
+            line=clean(source['순번']), customer=clean(source['고객']), destination=clean(source['납품처']),
+            trade=clean(source['거래구분']), shipment_type=clean(source['출고구분']),
+            owner=clean(source['담당자']), note=clean(source['비고(건)']), erp=clean(source['품번']),
+            item_name=clean(source['품명']), spec=clean(source['규격']), unit=clean(source['관리단위']),
+            quantity=str(quantity)))
+    if errors:
+        more = f' 외 {len(errors)-10}건' if len(errors) > 10 else ''
+        raise ValueError(' / '.join(errors[:10]) + more)
+    return result, negative
+
+
 def seed_rows():
+    detailed = Path(__file__).with_name('data') / 'shipment_detail_2026.tsv.gz.b64'
+    if detailed.exists():
+        content = gzip.decompress(base64.b64decode(detailed.read_text(encoding='ascii'))).decode('utf-8-sig')
+        return parse_shipments(content, detailed.name)[0]
     return [dict(date=day, erp=erp, quantity=quantity) for day, erp, quantity in SEED_ROWS]
 
 
@@ -293,7 +348,9 @@ def install_shipment_analysis(app, db):
                 flash('출고현황 파일은 4MB 이하만 등록할 수 있습니다.', 'error')
                 return redirect(url_for('expiry.shipment_analysis'))
             try:
-                rows, negative = parse_shipments(raw.decode('utf-8-sig'), upload.filename)
+                decoded = raw.decode('utf-8-sig')
+                rows, negative = parse_shipments(decoded, upload.filename)
+                detail_rows, _ = parse_shipment_detail(decoded, upload.filename)
             except UnicodeDecodeError:
                 flash('UTF-8로 저장된 파일만 등록할 수 있습니다.', 'error')
                 return redirect(url_for('expiry.shipment_analysis'))
@@ -308,9 +365,17 @@ def install_shipment_analysis(app, db):
                 base_revision='shipment-v1', as_of=as_of,
                 created_by=current_user.id, committed_at=datetime.now(timezone.utc))
             db.session.add(record)
+            if detail_rows is not None:
+                detail_record = Import(
+                    id=str(uuid.uuid4()), kind='shipment_detail', payload=detail_rows,
+                    notes={'filename': upload.filename, 'rows': len(detail_rows), 'negative_rows': negative},
+                    base_revision='shipment-detail-v1', as_of=as_of,
+                    created_by=current_user.id, committed_at=datetime.now(timezone.utc))
+                db.session.add(detail_record)
             db.session.commit()
             app.logger.info('SHIPMENT_DATA_UPDATED user=%s rows=%s', current_user.id, len(rows))
-            flash(f'출고현황 {len(rows):,}개 일자·품번 합산행을 적용했습니다.', 'success')
+            detail_message = f' · 거래처별 상세 {len(detail_rows):,}행' if detail_rows is not None else ''
+            flash(f'출고현황 {len(rows):,}개 일자·품번 합산행{detail_message}을 적용했습니다.', 'success')
             return redirect(url_for('expiry.shipment_analysis'))
         try:
             period = int(request.args.get('period', 6))
