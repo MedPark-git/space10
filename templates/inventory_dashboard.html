@@ -5,6 +5,12 @@
 {% if not dashboard or not dashboard.snapshot %}
 <section class="card empty-state"><h2>등록된 ERP 재고가 없습니다</h2><p>ERP 재고를 등록하면 제품 재고 대시보드가 생성됩니다.</p></section>
 {% else %}
+<style>
+.inventory-kpi-grid.with-shipment{grid-template-columns:repeat(6,minmax(0,1fr))}
+.shipment-kpi{border-top-color:#26778d!important}.shipment-kpi.coverage-low{border-top-color:#c34743!important}.shipment-kpi.coverage-mid{border-top-color:#d28a18!important}
+.shipment-value{font-variant-numeric:tabular-nums}.coverage-badge{display:inline-block;min-width:58px;padding:4px 7px;border-radius:4px;text-align:right;font-weight:900;background:#e8f3ed;color:#255d43}.coverage-badge.low{background:#fff0f0;color:#a02d35}.coverage-badge.mid{background:#fff5de;color:#855707}.coverage-badge.none{background:#eef1f3;color:#67727a}
+@media(max-width:1200px){.inventory-kpi-grid.with-shipment{grid-template-columns:repeat(3,1fr)}}@media(max-width:720px){.inventory-kpi-grid.with-shipment{grid-template-columns:repeat(2,1fr)}}
+</style>
 <div class="ref-panel inventory-only">
   <header class="ref-hero blue">
     <div>
@@ -52,13 +58,21 @@
         <span>금액 보기</span>
       </label>
     </div>
+    <div class="filter-block">
+      <label>평균 출고 기준</label>
+      <select name="shipment_period">
+        <option value="3" {{ 'selected' if dashboard.filters.shipment_period==3 }}>최근 3개월</option>
+        <option value="6" {{ 'selected' if dashboard.filters.shipment_period==6 }}>최근 6개월</option>
+        <option value="12" {{ 'selected' if dashboard.filters.shipment_period==12 }}>최근 12개월 범위</option>
+      </select>
+    </div>
     <div class="filter-actions">
       <button class="btn primary">조회</button>
       <a class="btn" href="{{ url_for('expiry.dashboard') }}">초기화</a>
     </div>
   </form>
 
-  <section class="inventory-kpi-grid compact-four">
+  <section class="inventory-kpi-grid compact-four with-shipment">
     <article class="inventory-kpi total">
       <span>총재고</span>
       <strong>{{ dashboard.metrics.total|qty }}</strong>
@@ -78,6 +92,16 @@
       <span>불용</span>
       <strong>{{ dashboard.metrics.unusable|qty }}</strong>
       <small>출고 제외 재고</small>
+    </article>
+    <article class="inventory-kpi shipment-kpi">
+      <span>{{ dashboard.filters.shipment_period }}개월 기준 월평균 출고</span>
+      <strong class="shipment-value">{{ '{:,.1f}'.format(dashboard.metrics.monthly_shipment) }}</strong>
+      <small>순출고 · 실제 평균 {{ dashboard.shipment.months|length }}개월</small>
+    </article>
+    <article class="inventory-kpi shipment-kpi {{ 'coverage-low' if dashboard.metrics.coverage_months is not none and dashboard.metrics.coverage_months < 1 else 'coverage-mid' if dashboard.metrics.coverage_months is not none and dashboard.metrics.coverage_months < 3 }}">
+      <span>재고 보유개월</span>
+      <strong>{{ '{:,.1f}'.format(dashboard.metrics.coverage_months) if dashboard.metrics.coverage_months is not none else '-' }}</strong>
+      <small>가용재고 ÷ 월평균 출고</small>
     </article>
   </section>
 
@@ -106,7 +130,7 @@
       <table class="ref-table product-summary-table">
         <thead>
           <tr>
-            <th>순서</th><th>제품명</th><th>가용</th><th>기타</th><th>불용</th><th>총재고</th>
+            <th>순서</th><th>제품명</th><th>가용</th><th>월평균 출고</th><th>보유개월</th><th>기타</th><th>불용</th><th>총재고</th>
             {% if dashboard.filters.show_value %}<th>재고금액</th>{% endif %}
           </tr>
         </thead>
@@ -125,6 +149,8 @@
                 {% endif %}
               </small>
             </td>
+            <td class="value-cell"><b>{{ '{:,.1f}'.format(p.monthly_shipment) }}</b><small>{{ dashboard.filters.shipment_period }}개월 기준</small></td>
+            <td><span class="coverage-badge {{ 'low' if p.coverage_months is not none and p.coverage_months < 1 else 'mid' if p.coverage_months is not none and p.coverage_months < 3 else 'none' if p.coverage_months is none }}">{{ '{:,.1f}'.format(p.coverage_months) if p.coverage_months is not none else '-' }}</span></td>
             <td class="warn"><b>{{ p.other|qty }}</b>{% if p.location_exception %}<small>위치예외 {{ p.location_exception|qty }}</small>{% endif %}</td>
             <td class="bad"><b>{{ p.unusable|qty }}</b></td>
             <td class="total-cell"><b>{{ p.total|qty }}</b></td>
@@ -133,7 +159,7 @@
             {% endif %}
           </tr>
           {% else %}
-          <tr><td colspan="8">해당 공장 제품이 없습니다.</td></tr>
+          <tr><td colspan="10">해당 공장 제품이 없습니다.</td></tr>
           {% endfor %}
         </tbody>
       </table>
@@ -172,7 +198,7 @@
             <thead>
               <tr>
                 <th class="category-first">분류</th><th>타입</th><th>사이즈</th>
-                <th>가용</th><th>기타</th><th>불용</th><th>총재고</th>
+                <th>가용</th><th>월평균 출고</th><th>보유개월</th><th>기타</th><th>불용</th><th>총재고</th>
                 {% if dashboard.filters.show_value %}<th>재고금액</th>{% endif %}
               </tr>
             </thead>
@@ -194,6 +220,8 @@
                   </small>
                   {% endif %}
                 </td>
+                <td class="value-cell"><b>{{ '{:,.1f}'.format(p.monthly_shipment) }}</b></td>
+                <td><span class="coverage-badge {{ 'low' if p.coverage_months is not none and p.coverage_months < 1 else 'mid' if p.coverage_months is not none and p.coverage_months < 3 else 'none' if p.coverage_months is none }}">{{ '{:,.1f}'.format(p.coverage_months) if p.coverage_months is not none else '-' }}</span></td>
                 <td class="stock-pos other">{{ p.other|qty if p.other else '-' }}{% if p.location_exception %}<small>위치예외 {{ p.location_exception|qty }}</small>{% endif %}</td>
                 <td class="stock-pos unusable">{{ p.unusable|qty if p.unusable else '-' }}</td>
                 <td class="total-cell"><b>{{ p.total|qty }}</b></td>
