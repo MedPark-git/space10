@@ -439,6 +439,11 @@ def install_order_fulfillment(app, db):
         saved = latest(kind)
         return (saved.payload, saved) if saved is not None else (seed(kind), None)
 
+    def import_exists(kind):
+        return db.session.scalar(select(Import.id).where(
+            Import.kind == kind, Import.committed_at.is_not(None)
+        ).order_by(Import.as_of.desc(), Import.committed_at.desc()).limit(1)) is not None
+
     def refs():
         result = {}
         for row in db.session.scalars(select(Reference).order_by(Reference.kind, Reference.key)):
@@ -493,11 +498,26 @@ def install_order_fulfillment(app, db):
                 db.session.commit();flash('준비현황을 저장했습니다.','success')
                 return redirect(url_for('expiry.order_fulfillment'))
             abort(400)
-        orders, order_import = source('sales_order')
-        quotes, quote_import = source('quote_register')
-        shipments, shipment_import = source('shipment_detail')
-        movements, movement_import = source('inventory_movement')
         scope = clean(request.args.get('scope')) or 'overseas'
+        if scope not in {'overseas', 'consignment', 'domestic'}:
+            scope = 'overseas'
+        orders, quotes, shipments, movements = [], [], [], []
+        order_import = quote_import = shipment_import = movement_import = False
+        if scope == 'overseas':
+            quotes, quote_import = source('quote_register')
+            shipments, shipment_import = source('shipment_detail')
+            order_import = import_exists('sales_order')
+            movement_import = import_exists('inventory_movement')
+        elif scope == 'consignment':
+            quotes, quote_import = source('quote_register')
+            movements, movement_import = source('inventory_movement')
+            order_import = import_exists('sales_order')
+            shipment_import = import_exists('shipment_detail')
+        else:
+            orders, order_import = source('sales_order')
+            shipments, shipment_import = source('shipment_detail')
+            quote_import = import_exists('quote_register')
+            movement_import = import_exists('inventory_movement')
         relevant = quotes if scope in {'overseas','consignment'} else orders
         latest_date = max(date.fromisoformat(row['date']) for row in relevant)
         start = clean(request.args.get('start')) or latest_date.replace(day=1).isoformat()
