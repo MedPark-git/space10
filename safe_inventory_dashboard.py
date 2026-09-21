@@ -9,10 +9,12 @@ from sqlalchemy import select
 from expiry_engine import calculate, family_rules, index_mts, number, stock_scope
 from product_display_master import lookup as product_display_lookup
 from product_display_admin import install_product_display_admin
+from shipment_analysis import install_shipment_analysis
 
 
 def make_inventory_dashboard_view(app, db):
     install_product_display_admin(app, db)
+    install_shipment_analysis(app, db)
     Reference = app.extensions["expiry_models"]["Reference"]
     Import = app.extensions["expiry_models"]["Import"]
 
