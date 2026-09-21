@@ -31,7 +31,7 @@ def build_expiry_board(rows, refs, factory=''):
     excluded_count = 0
     for source in rows:
         row = dict(source)
-        shown = lookup(row.get('icube'), row.get('name'), row.get('spec'))
+        shown = lookup(row.get('icube'), row.get('name'), row.get('spec'), refs=refs)
         name, typ, size, category = [display(shown.get(k)) for k in ('name','type','size','category')]
         fac = factory_for(clean(row.get('icube')), name, row, refs)
         if factory and fac != factory:
