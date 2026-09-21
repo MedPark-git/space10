@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block page_title %}월별 제품 제조원가{% endblock %}
+{% block breadcrumb %}ICUBE 품번별 출고단가(제품원가){% endblock %}
+{% block content %}
+<style>
+.uc{display:grid;gap:12px}.uc-hero{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:17px 19px;border-radius:8px;background:#194f68;color:#fff}.uc-hero h1{margin:0;font-size:22px}.uc-hero p{margin:4px 0 0;font-size:12px}.uc-month{font-size:20px;font-weight:900}.uc-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,.7fr);gap:12px}.uc-card{padding:15px;background:#fff;border:1px solid #c4d2db;border-radius:7px}.uc-card h2{margin:0 0 8px;font-size:17px}.uc-card p{font-size:12px;line-height:1.5}.uc-controls{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.uc-controls label{display:grid;gap:3px;font-size:12px;font-weight:800}.uc-controls input,.uc-controls button,.uc-btn{height:34px;padding:6px 9px;border:1px solid #aabdc8;border-radius:4px;background:#f2f6f8}.uc-primary{background:#17627a;color:#fff;border-color:#17627a;font-weight:800;cursor:pointer}.uc-paste{width:100%;min-height:310px;padding:10px;border:1px solid #aebfc9;font:12px/1.45 Consolas,'Malgun Gothic',monospace;white-space:pre}.uc-table-wrap{max-height:520px;overflow:auto}.uc-table{width:100%;border-collapse:collapse}.uc-table th,.uc-table td{padding:6px;border:1px solid #cad5dc;font-size:12px}.uc-table th{position:sticky;top:0;background:#e8f0f4}.uc-table td:last-child{text-align:right;font-variant-numeric:tabular-nums}.uc-negative{background:#fff0f0;color:#a02c35;font-weight:900}.uc-note{padding:9px 11px;background:#fff5dc;border-left:4px solid #d38a18;font-size:12px}@media(max-width:900px){.uc-grid{grid-template-columns:1fr}}
+</style>
+<div class="uc">
+ <header class="uc-hero"><div><h1>월별 제품 제조원가</h1><p>엑셀의 품번·출고단가 두 열을 그대로 복사해 붙여넣습니다.</p></div><div class="uc-month">{{ month }}</div></header>
+ <section class="uc-card"><form class="uc-controls" method="get"><label>조회월<input type="month" name="month" value="{{ month }}" required></label><button class="uc-primary">조회</button><a class="uc-btn" href="{{ url_for('expiry.unit_cost_download',month=month) }}">현재 월 원가 다운로드</a></form></section>
+ {% if negative_count %}<p class="uc-note">음수 제조원가 {{ negative_count|num }}건은 원본에는 보존되지만 재고금액 계산에서는 제외됩니다. 해당 품번의 값을 확인해 주세요.</p>{% endif %}
+ <div class="uc-grid">
+  {% if can_edit %}<section class="uc-card"><h2>{{ month }} 원가 복사·붙여넣기</h2><p>첫 행 제목이 있어도 됩니다. 쉼표가 포함된 금액과 엑셀의 줄바꿈 제목을 그대로 인식합니다. 같은 월·품번은 새 값으로 갱신됩니다.</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="month" value="{{ month }}"><textarea class="uc-paste" name="pasted" placeholder="품번&#9;출고단가(제품원가)&#10;11BC025-01&#9;7,097">{{ pasted }}</textarea><button class="uc-btn uc-primary" type="submit">검사 후 {{ month }} 원가 적용</button></form></section>{% endif %}
+  <section class="uc-card"><h2>등록 현황 · {{ rows|length|num }}건</h2><div class="uc-table-wrap"><table class="uc-table"><thead><tr><th>품번</th><th>출처</th><th>제품원가</th></tr></thead><tbody>{% for row in rows %}<tr class="{{ 'uc-negative' if row.cost<0 }}"><td>{{ row.icube }}</td><td>{{ row.source }}</td><td>{{ '{:,.0f}'.format(row.cost) }}원</td></tr>{% else %}<tr><td colspan="3">이 월에 등록된 원가가 없습니다.</td></tr>{% endfor %}</tbody></table></div></section>
+ </div>
+</div>
+{% endblock %}
