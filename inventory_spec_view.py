@@ -10,7 +10,7 @@ from product_display_master import lookup as product_lookup
 
 ZERO = Decimal('0')
 FACTORIES = {'12': '1·2공장', '3': '3공장', 'unknown': '공장 확인 필요'}
-OVERRIDES = {'MedParkAlloD': '3', 'S1-Allo 메디컬': '3', 'S1-Allo 덴탈': '3'}
+OVERRIDES = {'MedParkAllo': '3', 'MedParkAlloD': '3', 'S1-Allo 메디컬': '3', 'S1-Allo 덴탈': '3'}
 
 
 def clean(value):
@@ -91,6 +91,9 @@ def add_total(target, row):
 
 
 def factory_for(code, name, raw, refs):
+    custom = refs.get('product_factory', {}).get(name)
+    if isinstance(custom, dict) and custom.get('factory') in {'12', '3'}:
+        return custom['factory']
     if name in OVERRIDES:
         return '3'
     rule = refs.get('rules', {}).get(code[:4] + '|' + code[-2:]) or refs.get('rules', {}).get(code[:4] + '|*') or {}
@@ -328,6 +331,8 @@ def install_inventory_spec_view(app, db):
     Import = models['Import']
     app.jinja_env.filters['iv_qty'] = qty_filter
     app.jinja_env.filters['iv_won'] = won_filter
+    from product_order_admin import install_product_order_admin
+    install_product_order_admin(app, db)
 
     @login_required
     def inventory_spec_dashboard():
