@@ -11,6 +11,9 @@
 /* Keep application-header rules out of the nested inventory headings. */
 .app .ivdash .iv-hero {height:auto;min-height:0;background:linear-gradient(135deg,#163f63,#2d6f99);padding:16px 20px;border:0}
 .app .ivdash .iv-category-bar {height:auto;min-height:0;padding:6px 9px;background:#edf3f7;border-bottom:1px solid #d9e4eb}
+.iv-hero-side{display:grid;gap:8px;justify-items:end}.iv-print-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.iv-print-actions a{display:inline-block;padding:7px 10px;border:1px solid rgba(255,255,255,.75);border-radius:5px;color:#fff;background:rgba(255,255,255,.12);font-size:12px;font-weight:800}
+.iv-detail-table tfoot th,.iv-detail-table tfoot td{background:#dfeaf1;border-top:2px solid #7893a5;font-weight:900}
 </style>
 <div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260921-07">
   <header class="iv-hero">
@@ -19,7 +22,9 @@
       <h1>제품 재고 현황</h1>
       <p>완제품창고 재고 + 공정중창고 재고를 가용재고로 보고, 제품별 상세 재고를 확인합니다.</p>
     </div>
-    <div class="iv-date">재고 기준일<strong>{{ board.snapshot_date if board else '-' }}</strong></div>
+    <div class="iv-hero-side"><div class="iv-date">재고 기준일<strong>{{ board.snapshot_date if board else '-' }}</strong></div>
+      {% if board %}<div class="iv-print-actions"><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', capture='1') }}">3공장 인쇄</a></div>{% endif %}
+    </div>
   </header>
 
   {% if board %}
@@ -190,6 +195,7 @@
                 </tr>
                 {% endfor %}
               </tbody>
+              <tfoot><tr><th colspan="2">{{ c.name }} 소계</th><td class="iv-number">{{ c.available_finished|iv_qty }}</td><td class="iv-number">{{ c.available_work|iv_qty }}</td><td class="iv-number iv-available-total">{{ c.available|iv_qty }}</td><td class="iv-number">{{ c.other|iv_qty }}</td><td class="iv-number">{{ c.unusable|iv_qty }}</td><td class="iv-number">{{ c.total|iv_qty }}</td>{% if board.filters.show_value %}<td class="iv-number">{{ money(c) }}</td>{% endif %}</tr></tfoot>
             </table>
           </div>
         </section>
