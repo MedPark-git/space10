@@ -186,10 +186,12 @@ def fulfillment_key(customer, erp):
     return (re.sub(r'\s+', '', clean(customer)).casefold(), clean(erp).upper())
 
 
-def apply_fifo_fulfillment(rows, shipment_rows, scope):
-    """Apply actual sales shipments to customer+ERP demand in chronological FIFO order."""
+def apply_fifo_fulfillment(rows, shipment_rows, scope, as_of=None):
+    """Apply actual shipments to customer+ERP demand in chronological FIFO order."""
     if scope == 'overseas':
-        valid = lambda row: clean(row.get('trade')).upper() == 'T/T' and clean(row.get('shipment_type')) == '해외수주'
+        # Overseas physical shipments are also registered as "예외출고" in iCUBE.
+        # The T/T trade type is the reliable overseas boundary; shipment_type is not.
+        valid = lambda row: clean(row.get('trade')).upper() == 'T/T'
     elif scope == 'domestic':
         valid = lambda row: clean(row.get('trade')).upper() == 'DOMESTIC' and clean(row.get('shipment_type')) == '국내수주'
     else:
@@ -203,6 +205,8 @@ def apply_fifo_fulfillment(rows, shipment_rows, scope):
             (row['date'], 0, row['document'], natural(row['line']), 'demand', row))
     for shipment in shipment_rows or []:
         if not valid(shipment) or clean(shipment.get('unit')).upper() != 'EA':
+            continue
+        if as_of and clean(shipment.get('date')) > as_of:
             continue
         try:
             qty = number(shipment.get('quantity'))
@@ -241,7 +245,7 @@ def apply_fifo_fulfillment(rows, shipment_rows, scope):
                         fulfilled_stack.append((target, used - restored))
 
 
-def apply_consignment_movements(rows, movements):
+def apply_consignment_movements(rows, movements, as_of=None):
     """Apply net transfers into each customer-named consignment location."""
     events = defaultdict(list)
     for row in rows:
@@ -252,6 +256,8 @@ def apply_consignment_movements(rows, movements):
             (row['date'], 0, row['document'], natural(row['line']), 'demand', row))
     for movement in movements or []:
         if clean(movement.get('unit')).upper() != 'EA':
+            continue
+        if as_of and clean(movement.get('date')) > as_of:
             continue
         from_wh = re.sub(r'\s+', '', clean(movement.get('from_warehouse')))
         to_wh = re.sub(r'\s+', '', clean(movement.get('to_warehouse')))
@@ -353,10 +359,11 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
             row['status'], row['shortage'] = '미이동 잔량', None
         lines.append(row)
 
+    cutoff = end or date.today().isoformat()
     if scope == 'consignment':
-        apply_consignment_movements(lines, movements)
+        apply_consignment_movements(lines, movements, cutoff)
     elif shipments:
-        apply_fifo_fulfillment(lines, shipments, scope)
+        apply_fifo_fulfillment(lines, shipments, scope, cutoff)
     elif scope in {'overseas','domestic'}:
         try:
             from shipment_fulfillment_seed import FULFILLED
