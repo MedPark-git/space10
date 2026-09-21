@@ -367,15 +367,18 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
             completed = min(number(FULFILLED.get(row['key'])), row['quantity'])
             row['fulfilled'] = completed
             row['remaining'] = row['quantity'] - completed
-    if scope == 'overseas':
-        allocate_waiting_stock(lines, stock_by_erp)
-    visible = []
+    period_lines = []
     for row in lines:
         if (start and row['date'] < start) or (end and row['date'] > end):
             continue
-        if query and query not in ' '.join(clean(row.get(k)) for k in ('document','customer','owner','erp','item_name','spec')).casefold():
-            continue
         if row['remaining'] <= 0:
+            continue
+        period_lines.append(row)
+    if scope == 'overseas':
+        allocate_waiting_stock(period_lines, stock_by_erp)
+    visible = []
+    for row in period_lines:
+        if query and query not in ' '.join(clean(row.get(k)) for k in ('document','customer','owner','erp','item_name','spec')).casefold():
             continue
         if scope == 'overseas':
             row['shortage'] = max(row['remaining'] - row['prepared'], ZERO)
