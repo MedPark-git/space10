@@ -86,6 +86,10 @@ def restore_routes(app, db, audit, roles):
 
     @login_required
     def index():
+        from expiry_display import render_expiry_display
+        return render_expiry_display(current_view)
+
+    def legacy_index():
         refs, snapshot, as_of, summary, warehouses, statuses, rows = current_view()
         shown, page, pages = paginate(rows)
         selected = request.args.get('bucket', '')
