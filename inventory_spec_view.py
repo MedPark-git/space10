@@ -413,14 +413,31 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
     overall['monthly_shipment'] = sum((group['monthly_shipment'] for section in sections for group in section['products'] if group['monthly_shipment'] > 0), ZERO)
     overall['coverage_months'] = overall['available'] / overall['monthly_shipment'] if overall['monthly_shipment'] > 0 else None
     management = {key: [] for key in ('stockout','critical','watch','excess','no_demand','location')}
+    work_schedule = []
     for section in sections:
         for group in section['products']:
             if group['management_key'] in management:
                 management[group['management_key']].append(group)
+            for row in group['rows']:
+                if row['available_work'] <= 0:
+                    continue
+                work_locations = [location for location in row['locations']
+                                  if '공정중' in location['warehouse']]
+                work_schedule.append(dict(
+                    factory=section['label'], family=group['family'], product=group['name'],
+                    category=row['category'], type=row['type'], size=row['size'],
+                    quantity=row['available_work'], locations=work_locations,
+                    completion=row['completion'], erps=row['completion']['erps']))
+    work_schedule.sort(key=lambda row: (
+        natural(row['factory']), natural(row['family']), natural(row['product']),
+        category_key(row['category']), natural(row['type']), natural(row['size'])))
     return dict(filters=selected, sections=sections, metrics=overall, warehouses=warehouses,
                 invalid_rows=invalid_rows, excluded_rows=excluded_rows, missing_cost=len(missing_cost),
                 unmapped=len(unmapped), source_rows=len(rows), snapshot_date=snapshot_date,
-                product_count=sum(len(section['products']) for section in sections), management=management)
+                product_count=sum(len(section['products']) for section in sections), management=management,
+                work_schedule=work_schedule,
+                work_total=sum((row['quantity'] for row in work_schedule), ZERO),
+                work_missing=sum(not row['completion']['dates'] for row in work_schedule))
 
 
 def install_inventory_spec_view(app, db):
@@ -464,7 +481,8 @@ def install_inventory_spec_view(app, db):
         flash(f'공정중 예상완료일을 {len(erps)}개 품번에 적용했습니다.', 'success')
         target = {'snapshot': clean(request.form.get('snapshot')),
                   'product_factory': clean(request.form.get('product_factory')),
-                  'shipment_period': clean(request.form.get('shipment_period')) or '6'}
+                  'shipment_period': clean(request.form.get('shipment_period')) or '6',
+                  'view': clean(request.form.get('view'))}
         if request.form.get('show_value') == '1':
             target['show_value'] = '1'
         return redirect(url_for('expiry.dashboard', **{key: value for key, value in target.items() if value}))
