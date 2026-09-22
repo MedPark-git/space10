@@ -5,7 +5,9 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 from pathlib import Path
 import base64
+import csv
 import gzip
+import io
 import re
 import uuid
 
@@ -50,18 +52,25 @@ def number(value):
 
 def markdown_rows(content, kind):
     fields = QUOTE_FIELDS if kind == 'quote_register' else ORDER_FIELDS
-    lines = [line for line in content.lstrip('\ufeff').splitlines() if line.strip().startswith('|')]
-    if len(lines) < 3:
-        raise ValueError('열 제목을 포함한 마크다운 표를 붙여넣어 주세요.')
-    cells = lambda line: [clean(value).replace('\\~', '~').replace('　', '') for value in line.strip().strip('|').split('|')]
-    header = cells(lines[0])
+    lines = [line for line in content.lstrip('\ufeff').splitlines() if line.strip()]
+    if len(lines) < 2:
+        raise ValueError('엑셀에서 열 제목과 데이터 행을 함께 복사해 붙여넣어 주세요.')
+    if lines[0].lstrip().startswith('|'):
+        cells = lambda line: [clean(value).replace('\\~', '~').replace('　', '') for value in line.strip().strip('|').split('|')]
+        raw = [cells(line) for line in lines]
+        data_start = 2 if len(raw) > 1 and all(re.fullmatch(r':?-{2,}:?', value) for value in raw[1]) else 1
+    else:
+        delimiter = '\t' if '\t' in lines[0] else ','
+        raw = [[clean(value).replace('　', '') for value in row]
+               for row in csv.reader(io.StringIO('\n'.join(lines)), delimiter=delimiter)]
+        data_start = 1
+    header = raw[0]
     missing = [name for name in fields if name not in header]
     if missing:
-        raise ValueError('필수 열이 없습니다: ' + ', '.join(missing))
+        raise ValueError('복사한 표에서 다음 열 제목을 찾을 수 없습니다: ' + ', '.join(missing))
     index = {name: header.index(name) for name in fields}
     result, errors = [], []
-    for row_no, line in enumerate(lines[2:], 3):
-        values = cells(line)
+    for row_no, values in enumerate(raw[data_start:], data_start + 1):
         if len(values) != len(header):
             errors.append(f'{row_no}행 열 개수 불일치')
             continue
@@ -87,15 +96,13 @@ def markdown_rows(content, kind):
 
 
 def movement_rows(content):
-    import csv
-    import io
     raw = list(csv.reader(io.StringIO(content.lstrip('\ufeff')), delimiter='\t'))
-    if not raw:
-        raise ValueError('파일이 비어 있습니다.')
+    if len(raw) < 2 or not any(clean(value) for value in raw[0]):
+        raise ValueError('엑셀에서 열 제목과 데이터 행을 함께 복사해 붙여넣어 주세요.')
     header = [clean(value) for value in raw[0]]
     missing = [name for name in MOVEMENT_FIELDS if name not in header]
     if missing:
-        raise ValueError('재고이동 필수 열이 없습니다: ' + ', '.join(missing))
+        raise ValueError('복사한 재고이동표에서 다음 열 제목을 찾을 수 없습니다: ' + ', '.join(missing))
     index = {name:header.index(name) for name in MOVEMENT_FIELDS}
     result, errors = [], []
     for row_no, values in enumerate(raw[1:], 2):
