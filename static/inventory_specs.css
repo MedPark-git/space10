@@ -70,6 +70,7 @@
 .iv-mini{display:inline-flex;gap:4px;align-items:center;padding:5px 7px;border-radius:8px;font-size:.56rem;font-weight:700;background:#eef3f6;color:#587084}
 .iv-mini b{font-size:.68rem;font-variant-numeric:tabular-nums}
 .iv-mini-available{background:#eaf6f1;color:#24725d}.iv-mini-other{background:#fff6df;color:#8b6500}.iv-mini-unusable{background:#fff0f1;color:#b34048}.iv-mini-total{background:#e8f2f8;color:#1a5379}.iv-mini-total b{font-size:.76rem}
+.iv-mini-completion{background:#e9f2fb;color:#245d85}.iv-mini-completion.missing{background:#fff3df;color:#8b5b08}
 .iv-category-stack{display:grid;gap:10px;padding:12px;background:#f3f6f8}
 .iv-category-card{overflow:hidden;border:1px solid #d4e0e7;border-radius:10px;background:#fff}
 .iv-category-card:nth-child(4n+1){border-left:5px solid #2f759d}.iv-category-card:nth-child(4n+2){border-left:5px solid #6d7ca6}.iv-category-card:nth-child(4n+3){border-left:5px solid #7a9b6e}.iv-category-card:nth-child(4n){border-left:5px solid #a7835d}
@@ -89,6 +90,12 @@
 .iv-manage-table .iv-qty-cell{min-width:84px}
 .iv-manage-table .iv-qty-cell>b{font-size:.94rem}
 .iv-value-cell{min-width:125px;background:#f7fbfd}
+.iv-completion-head{min-width:126px;background:#e8f1f8!important;color:#245d82!important}
+.iv-completion-cell{min-width:126px;padding:4px 5px!important;text-align:center;background:#f8fbfd}
+.iv-completion-form{display:grid;grid-template-columns:minmax(102px,1fr) 42px;gap:3px;align-items:center}
+.iv-completion-form input[type=date]{width:100%;min-width:0;height:28px;padding:2px 4px;border:1px solid #aebfcb;border-radius:4px;background:#fff;color:#24475e;font-size:.58rem}
+.iv-completion-form button{height:28px;padding:2px 4px;border:0;border-radius:4px;background:#285f7d;color:#fff;font-size:.55rem;font-weight:900;cursor:pointer}
+.iv-completion-date{display:inline-block;padding:4px 6px;border-radius:5px;background:#e8f2fa;color:#235d84;font-weight:900}.iv-completion-date.missing{background:#fff3df;color:#8b5b08}.iv-muted{color:#91a0aa}
 .iv-kpi-money{margin-top:4px;font-size:.61rem;color:#587185}.iv-kpi-money b{font-size:.7rem}
 @media(max-width:900px){
   .iv-product-summary{align-items:flex-start!important;flex-direction:column}
@@ -130,6 +137,7 @@
 .iv-category-totals{gap:3px}
 .iv-category-totals span{padding:2px 5px;font-size:.5rem}
 .iv-manage-table{
+  min-width:1080px;
   border-collapse:separate;
   border-spacing:0;
   border-top:1px solid #c8d5de;
