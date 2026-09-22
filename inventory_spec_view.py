@@ -1,8 +1,8 @@
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from flask import abort, render_template, request
+from flask import abort, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import select
 
@@ -42,6 +42,31 @@ def natural(value):
 
 def display(value):
     return re.sub(r'\s+', ' ', re.sub(r'\\([~*])', r'\1', clean(value))).replace('*', '×')
+
+
+def completion_summary(erps, refs):
+    """Return the active WIP completion schedule shared with order fulfillment."""
+    schedules = refs.get('work_completion', {})
+    dates = []
+    notes = []
+    for erp in sorted(erps, key=natural):
+        payload = schedules.get(erp)
+        if not isinstance(payload, dict):
+            continue
+        expected = clean(payload.get('expected_date'))
+        if expected:
+            dates.append(expected)
+        note = clean(payload.get('note'))
+        if note:
+            notes.append(note)
+    dates = sorted(set(dates))
+    return dict(
+        erps=sorted(erps, key=natural),
+        dates=dates,
+        expected_date=dates[0] if dates else '',
+        label=(dates[0] + (f' 외 {len(dates)-1}건' if len(dates) > 1 else '')) if dates else '일정 미등록',
+        note=' / '.join(dict.fromkeys(notes)),
+    )
 
 
 def product_family(name):
@@ -273,8 +298,10 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
             line_key += (row['icube'] or row['erp'],)
             unmapped.add(row['icube'] or row['erp'])
         line = group['lines'].setdefault(line_key, dict(category=row['category'], type=row['type'], size=row['size'],
-            original_specs=set(), places={}, monthly_shipment=ZERO, shipment_erps=set(), **totals()))
+            original_specs=set(), places={}, monthly_shipment=ZERO, shipment_erps=set(), work_erps=set(), **totals()))
         add_total(line, row)
+        if row['physical'].startswith('work') and row['erp']:
+            line['work_erps'].add(row['erp'])
         if row['erp'] and row['erp'] not in line['shipment_erps']:
             line['monthly_shipment'] += shipment_averages.get(row['erp'], ZERO)
             line['shipment_erps'].add(row['erp'])
@@ -304,11 +331,17 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
             lines = list(group.pop('lines').values())
             for line in lines:
                 line.pop('shipment_erps', None)
+                line['completion'] = completion_summary(line.pop('work_erps'), refs)
                 line['coverage_months'] = line['available'] / line['monthly_shipment'] if line['monthly_shipment'] > 0 else None
                 line['management_key'], line['management_label'] = management_status(
                     line['available'], line['monthly_shipment'], line['coverage_months'], line['location_exception'])
             lines.sort(key=lambda row: (category_key(row['category']), natural(row['type']), natural(row['size'])))
             group['rows'] = lines
+            group_dates = sorted({scheduled for row in lines if row['available_work'] > 0
+                                  for scheduled in row['completion']['dates']})
+            group['completion_dates'] = group_dates
+            group['completion_label'] = (group_dates[0] + (f' 외 {len(group_dates)-1}건' if len(group_dates) > 1 else '')
+                                         if group_dates else ('일정 미등록' if group['available_work'] > 0 else ''))
             group['specs'] = sorted({row['size'] for row in lines if row['size'] not in {'', '-'}}, key=natural)
             group['types'] = sorted({row['type'] for row in lines}, key=natural)
             spec_summary = {}
@@ -402,6 +435,44 @@ def install_inventory_spec_view(app, db):
     install_order_fulfillment(app, db)
 
     @login_required
+    def save_work_completion():
+        if current_user.role not in {'admin', 'editor'}:
+            abort(403)
+        erps = list(dict.fromkeys(clean(value) for value in request.form.getlist('erp') if clean(value)))
+        if not erps or len(erps) > 30 or any(len(erp) > 100 for erp in erps):
+            abort(400)
+        expected_date = clean(request.form.get('expected_date'))
+        if expected_date:
+            try:
+                date.fromisoformat(expected_date)
+            except ValueError:
+                flash('예상완료일을 확인해 주세요.', 'error')
+                return redirect(url_for('expiry.dashboard'))
+        note = clean(request.form.get('note'))[:300]
+        now = datetime.now(timezone.utc)
+        for erp in erps:
+            row = db.session.scalar(select(Reference).where(
+                Reference.kind == 'work_completion', Reference.key == erp))
+            if row is None:
+                row = Reference(kind='work_completion', key=erp, payload={},
+                                updated_by=current_user.id, updated_at=now)
+                db.session.add(row)
+            row.payload = {'expected_date': expected_date, 'note': note}
+            row.updated_by = current_user.id
+            row.updated_at = now
+        db.session.commit()
+        flash(f'공정중 예상완료일을 {len(erps)}개 품번에 적용했습니다.', 'success')
+        target = {'snapshot': clean(request.form.get('snapshot')),
+                  'product_factory': clean(request.form.get('product_factory')),
+                  'shipment_period': clean(request.form.get('shipment_period')) or '6'}
+        if request.form.get('show_value') == '1':
+            target['show_value'] = '1'
+        return redirect(url_for('expiry.dashboard', **{key: value for key, value in target.items() if value}))
+
+    app.add_url_rule('/expiry/work-completion', endpoint='expiry.work_completion',
+                     view_func=save_work_completion, methods=['POST'])
+
+    @login_required
     def inventory_spec_dashboard():
         refs = {}
         for ref in db.session.scalars(select(Reference).order_by(Reference.kind, Reference.key)):
@@ -428,7 +499,7 @@ def install_inventory_spec_view(app, db):
             shipment_averages, shipment_meta = shipment_average_index(app, db, shipment_period)
             filters = dict(q=request.args.get('q', ''), warehouses=request.args.getlist('warehouse'),
                 product_factory=request.args.get('product_factory', ''), availability=request.args.get('availability', ''),
-                show_value=True, shipment_period=shipment_period)
+                show_value=request.args.get('show_value') == '1', shipment_period=shipment_period)
             board = build_board(snapshot.payload or [], refs, filters, snapshot.as_of, shipment_averages)
             board['shipment'] = shipment_meta
         return render_template('inventory_specs.html', board=board, factories=FACTORIES,
