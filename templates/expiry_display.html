@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block page_title %}제품별 유효기간 현황{% endblock %}
+{% block page_title %}유효기간 위험요약·인쇄{% endblock %}
 {% block breadcrumb %}창고 · 장소 · 제품 · 규격 · 수량 · 금액{% endblock %}
 {% block content %}
 {% set capture_mode = request.args.get('capture') == '1' %}
@@ -23,7 +23,8 @@
 .ex-stats a {border:1px solid #c2d0da;border-top:3px solid #578476;border-radius:6px;background:#fff;padding:9px;display:grid;gap:3px;font-size:11px}
 .ex-stats b {font-size:20px}.ex-stats small {font-size:10px;color:#566d7c}.ex-stats [aria-current="true"] {outline:2px solid #164d65}
 .ex-stats a.ex-expired {border-top-color:#ba333c}.ex-stats a.ex-due90 {border-top-color:#d78917}.ex-stats a.ex-issue {border-top-color:#8060ac}
-.ex-note {font-size:12px;line-height:1.5;margin:0}.ex-tools {display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+	.ex-note {font-size:12px;line-height:1.5;margin:0}.ex-tools {display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+	.ex-role-note{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:9px 11px;border:1px solid #b8cbd5;border-left:4px solid #28758b;border-radius:6px;background:#f4f8fa;font-size:11px;line-height:1.5}.ex-role-note a{white-space:nowrap;padding:5px 8px;border:1px solid #afc1cc;border-radius:4px;background:#fff;color:#244e65;font-weight:800}
 .ex-tools button,.ex-tools a {font-size:12px;padding:5px 8px;border:1px solid #bdcdd6;background:white;border-radius:4px;cursor:pointer}
 .ex-factory>h2 {padding:7px 10px;margin:0 0 8px;border-left:4px solid #356781;background:#e4edf3;font-size:16px}
 .ex-product {background:white;border:1px solid #b8ccd7;border-radius:6px;margin-bottom:10px;overflow:hidden}
@@ -46,7 +47,8 @@
 @media print { @page {size:A4 landscape;margin:7mm} body:has(.ex-board) .sidebar,body:has(.ex-board) .app>header,.ex-filters,.ex-tools,.ex-table details{display:none!important} body:has(.ex-board) .app{margin:0} body:has(.ex-board) main{padding:0;max-width:none}.ex-stats{grid-template-columns:repeat(6,1fr)}.ex-product{break-inside:auto}.ex-table tr{break-inside:avoid}.ex-table thead{display:table-header-group}.ex-table-wrap{overflow:visible}.ex-table{min-width:0}.ex-table th,.ex-table td{font-size:8pt;padding:3px}.ex-product>summary{break-after:avoid}.ex-factory{break-before:page}.ex-factory:first-of-type{break-before:auto} }
 </style>
 <div class="ex-board" data-release="expiry-display-20260921-12">
- <div class="ex-title"><div><h1>유효기간 위험구간별 재고 현황</h1><p>{{ 'LOT별 상세' if detail_mode else '유효기간 구간 → 관리 기준 → 제품 → 규격 → 수량 → 금액' }}</p></div><div class="ex-title-side"><div>재고 기준일 {{ snapshot.as_of if snapshot else '-' }}<br>유효기간 평가일 {{ as_of }}</div><div class="ex-print-actions"><a href="{{ filter_url(capture='1', product_factory='12') }}">1·2공장 인쇄</a><a href="{{ filter_url(capture='1', product_factory='3') }}">3공장 인쇄</a></div></div></div>
+	<div class="ex-title"><div><h1>유효기간 위험요약·인쇄</h1><p>{{ 'LOT별 상세' if detail_mode else '유효기간 구간 → 관리 기준 → 제품 → 규격 → 수량 → 금액' }}</p></div><div class="ex-title-side"><div>재고 기준일 {{ snapshot.as_of if snapshot else '-' }}<br>유효기간 평가일 {{ as_of }}</div><div class="ex-print-actions"><a href="{{ filter_url(capture='1', product_factory='12') }}">1·2공장 인쇄</a><a href="{{ filter_url(capture='1', product_factory='3') }}">3공장 인쇄</a></div></div></div>
+	<div class="ex-role-note"><span><b>같은 ERP 재고를 사용합니다.</b> 이 화면은 보고·인쇄용으로 위험구간별 합계를 보여주고, ‘LOT 원본·검증’은 개별 LOT의 유효기간 계산근거와 원본 행을 확인하는 화면입니다.</span><a href="{{ url_for('expiry.index') }}">LOT 원본·검증 열기</a></div>
  <form class="ex-filters" method="get">
   {% if snapshot %}<input type="hidden" name="snapshot" value="{{ snapshot.id }}">{% endif %}
   {% if request.args.get('factory') %}<input type="hidden" name="factory" value="{{ request.args.factory }}">{% endif %}
