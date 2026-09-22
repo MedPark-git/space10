@@ -6,7 +6,7 @@
 {% if capture_mode %}
 {% include 'inventory_print.html' %}
 {% else %}
-<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260921-07') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260922-10') }}">
 <style>
 /* Keep application-header rules out of the nested inventory headings. */
 .app .ivdash .iv-hero {height:auto;min-height:0;background:linear-gradient(135deg,#163f63,#2d6f99);padding:16px 20px;border:0}
@@ -19,7 +19,7 @@
 .iv-action-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0}.iv-action{padding:10px;border:1px solid #c2d0d9;border-left:4px solid #54788d;border-radius:6px;background:#fff}.iv-action.critical{border-left-color:#bd323b}.iv-action.watch{border-left-color:#d18b1c}.iv-action.excess{border-left-color:#7661a5}.iv-action.data{border-left-color:#667984}.iv-action span{font-size:11px;color:#536976}.iv-action b{display:block;margin:3px 0;font-size:18px}.iv-action small{display:block;line-height:1.35;color:#667984}.iv-family{margin:12px 0 18px;border:2px solid #aec0cb;border-radius:7px;overflow:hidden;background:#f8fafb}.iv-family-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 11px;background:#dfeaf1;border-bottom:1px solid #afc1cc}.iv-family-head h3{margin:0;font-size:16px;color:#173f5a}.iv-family-head span{font-size:11px;text-align:right}.iv-family-body{padding:8px}.iv-management{display:inline-block;padding:3px 6px;border-radius:4px;background:#e8f3ed;color:#255d43;font-size:10px;font-weight:900}.iv-management.stockout,.iv-management.critical{background:#fff0f0;color:#a02d35}.iv-management.watch{background:#fff5dc;color:#875807}.iv-management.excess,.iv-management.no_demand{background:#f2edfa;color:#674c90}.iv-management.location{background:#fff1e5;color:#9b4e12}
 @media(max-width:1100px){.iv-kpis.iv-six{grid-template-columns:repeat(3,1fr)}.iv-action-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:700px){.iv-kpis.iv-six,.iv-action-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
-<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260921-08">
+<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260922-10">
   <header class="iv-hero">
     <div>
       <p class="iv-eyebrow">MEDPARK INVENTORY</p>
@@ -27,7 +27,7 @@
       <p>완제품창고 재고 + 공정중창고 재고를 가용재고로 보고, 제품별 상세 재고를 확인합니다.</p>
     </div>
     <div class="iv-hero-side"><div class="iv-date">재고 기준일<strong>{{ board.snapshot_date if board else '-' }}</strong></div>
-      {% if board %}<div class="iv-print-actions"><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, capture='1') }}">3공장 인쇄</a></div>{% endif %}
+      {% if board %}<div class="iv-print-actions"><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">3공장 인쇄</a></div>{% endif %}
     </div>
   </header>
 
@@ -57,7 +57,7 @@
         <button type="button" id="iv-all-warehouses">전체 창고</button>
       </div>
     </details>
-    <span class="iv-switch"><span>재고금액 상시 표시</span></span>
+    <label class="iv-switch"><input id="iv-money" type="checkbox" name="show_value" value="1" {{ 'checked' if board.filters.show_value }}><span>재고금액 표시</span></label>
     <label>평균 출고 기준
       <select name="shipment_period"><option value="3" {{ 'selected' if board.filters.shipment_period==3 }}>최근 3개월</option><option value="6" {{ 'selected' if board.filters.shipment_period==6 }}>최근 6개월</option><option value="12" {{ 'selected' if board.filters.shipment_period==12 }}>최근 12개월 범위</option></select>
     </label>
@@ -120,8 +120,8 @@
       <button type="button" id="iv-collapse">전체 접기</button>
       <a href="{{ url_for('expiry.dashboard_expiry') }}">유효기간 위험현황</a>
       <a href="{{ url_for('expiry.order_fulfillment') }}">주문·미납현황</a>
-      <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, capture='1') }}">1·2공장 캡처</a>
-      <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, capture='1') }}">3공장 캡처</a>
+      <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">1·2공장 캡처</a>
+      <a class="iv-capture-link" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">3공장 캡처</a>
       {% if can_edit %}
       <a href="{{ url_for('expiry.product_display_master') }}">제품 기준표 관리</a>
       <a href="{{ url_for('expiry.product_order') }}">제품 순서 설정</a>
@@ -151,6 +151,7 @@
         </div>
         <div class="iv-product-totals">
           <span class="iv-mini iv-mini-available">가용재고 <b>{{ g.available|iv_qty }}</b><small>완제품+공정중</small></span>
+          {% if g.available_work > 0 %}<span class="iv-mini iv-mini-completion {{ 'missing' if not g.completion_dates }}">공정완료 <b>{{ g.completion_label }}</b></span>{% endif %}
           <span class="iv-mini iv-mini-other">기타 <b>{{ g.other|iv_qty }}</b></span>
           <span class="iv-mini iv-mini-unusable">불용 <b>{{ g.unusable|iv_qty }}</b></span>
           <span class="iv-mini iv-mini-total">총 <b>{{ g.total|iv_qty }}</b> EA</span>
@@ -186,6 +187,7 @@
                   <th class="iv-spec-head">규격(사이즈)</th>
                   <th>완제품</th>
                   <th>공정중</th>
+                  <th class="iv-completion-head">예상완료일<small>공정중 재고</small></th>
                   <th class="iv-available-head">가용재고<small>완제품+공정중</small></th>
                   <th>기타</th>
                   <th>불용</th>
@@ -213,6 +215,17 @@
                   </td>
                   <td class="iv-number iv-qty-cell iv-finished"><b>{{ r.available_finished|iv_qty }}</b><small>EA</small></td>
                   <td class="iv-number iv-qty-cell iv-work"><b>{{ r.available_work|iv_qty }}</b><small>EA</small></td>
+                  <td class="iv-completion-cell">
+                    {% if r.available_work > 0 and r.completion.erps %}
+                      {% if can_edit %}<form method="post" action="{{ url_for('expiry.work_completion') }}" class="iv-completion-form">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        {% for erp in r.completion.erps %}<input type="hidden" name="erp" value="{{ erp }}">{% endfor %}
+                        <input type="hidden" name="snapshot" value="{{ snapshot_id }}"><input type="hidden" name="product_factory" value="{{ board.filters.product_factory }}"><input type="hidden" name="shipment_period" value="{{ board.filters.shipment_period }}">{% if board.filters.show_value %}<input type="hidden" name="show_value" value="1">{% endif %}
+                        <input type="date" name="expected_date" value="{{ r.completion.expected_date }}" aria-label="{{ g.name }} {{ r.size }} 공정중 예상완료일"><button type="submit">저장</button>
+                      </form>{% else %}<span class="iv-completion-date {{ 'missing' if not r.completion.dates }}">{{ r.completion.label }}</span>{% endif %}
+                      {% if r.completion.dates|length > 1 %}<small>{{ r.completion.label }}</small>{% elif not r.completion.dates %}<small class="iv-warning">일정 미등록</small>{% endif %}
+                    {% elif r.available_work > 0 %}<span class="iv-warning">품번 확인</span>{% else %}<span class="iv-muted">-</span>{% endif %}
+                  </td>
                   <td class="iv-number iv-qty-cell iv-available-total"><b>{{ (r.available_finished + r.available_work)|iv_qty }}</b><small>EA</small></td>
                   <td class="iv-number iv-qty-cell iv-other"><b>{{ r.other|iv_qty }}</b><small>EA</small>{% if r.location_exception %}<small class="iv-warning">위치 확인 {{ r.location_exception|iv_qty }}</small>{% endif %}</td>
                   <td class="iv-number iv-qty-cell iv-unusable"><b>{{ r.unusable|iv_qty }}</b><small>EA</small></td>
@@ -223,7 +236,7 @@
                 </tr>
                 {% endfor %}
               </tbody>
-              <tfoot><tr><th colspan="2">{{ c.name }} 소계</th><td class="iv-number">{{ c.available_finished|iv_qty }}</td><td class="iv-number">{{ c.available_work|iv_qty }}</td><td class="iv-number iv-available-total">{{ c.available|iv_qty }}</td><td class="iv-number">{{ c.other|iv_qty }}</td><td class="iv-number">{{ c.unusable|iv_qty }}</td><td class="iv-number">{{ c.total|iv_qty }}</td><td colspan="2"></td>{% if board.filters.show_value %}<td class="iv-number">{{ money(c) }}</td>{% endif %}</tr></tfoot>
+              <tfoot><tr><th colspan="2">{{ c.name }} 소계</th><td class="iv-number">{{ c.available_finished|iv_qty }}</td><td class="iv-number">{{ c.available_work|iv_qty }}</td><td></td><td class="iv-number iv-available-total">{{ c.available|iv_qty }}</td><td class="iv-number">{{ c.other|iv_qty }}</td><td class="iv-number">{{ c.unusable|iv_qty }}</td><td class="iv-number">{{ c.total|iv_qty }}</td><td colspan="2"></td>{% if board.filters.show_value %}<td class="iv-number">{{ money(c) }}</td>{% endif %}</tr></tfoot>
             </table>
           </div>
         </section>
@@ -237,11 +250,11 @@
   {% endfor %}
 
   {% if not board.sections %}<section class="iv-empty">조회 조건에 맞는 재고가 없습니다.</section>{% endif %}
-  <p class="iv-footnote">가용재고는 완제품창고 재고와 공정중창고 재고의 합계입니다. 불용 분류 재고와 공장 위치 예외는 각각 불용·기타로 표시합니다.</p>
+  <p class="iv-footnote">가용재고는 완제품창고 재고와 공정중창고 재고의 합계입니다. 공정중 예상완료일은 수주·출하관리에도 동일하게 적용되며, 공정중수량이 없어지면 현재 화면에서는 자동으로 숨겨집니다.</p>
   {% else %}
   <section class="iv-empty">등록된 ERP 재고가 없습니다.</section>
   {% endif %}
 </div>
-<script src="{{ url_for('static', filename='inventory_specs.js', v='20260921-07') }}" defer></script>
+<script src="{{ url_for('static', filename='inventory_specs.js', v='20260922-10') }}" defer></script>
 {% endif %}
 {% endblock %}
