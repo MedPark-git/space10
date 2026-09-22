@@ -24,11 +24,11 @@
   <header class="iv-hero">
     <div>
       <p class="iv-eyebrow">MEDPARK INVENTORY</p>
-      <h1>제품 재고 현황</h1>
-      <p>완제품창고 재고 + 공정중창고 재고를 가용재고로 보고, 제품별 상세 재고를 확인합니다.</p>
+      <h1>{{ '공정중 재고 일정 관리' if work_mode else '제품 재고 현황' }}</h1>
+      <p>{% if work_mode %}1·2공장과 3공장의 공정중 재고를 한곳에 모아 예상완료일을 입력합니다.{% else %}완제품창고 재고 + 공정중창고 재고를 가용재고로 보고, 제품별 상세 재고를 확인합니다.{% endif %}</p>
     </div>
     <div class="iv-hero-side"><div class="iv-date">재고 기준일<strong>{{ board.snapshot_date if board else '-' }}</strong></div>
-      {% if board %}<div class="iv-print-actions"><a class="{{ 'iv-mode-on' if work_mode }}" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, view='work', product_factory=board.filters.product_factory, shipment_period=board.filters.shipment_period) }}">공정중 일정입력</a>{% if work_mode %}<a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory=board.filters.product_factory, shipment_period=board.filters.shipment_period) }}">전체 재고현황</a>{% endif %}<a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">3공장 인쇄</a></div>{% endif %}
+      {% if board %}<div class="iv-print-actions"><a class="{{ 'iv-mode-on' if work_mode }}" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, view='work', shipment_period=board.filters.shipment_period) }}">공정중 전체 모아보기</a>{% if work_mode %}<a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, shipment_period=board.filters.shipment_period) }}">전체 재고현황</a>{% endif %}<a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">3공장 인쇄</a></div>{% endif %}
     </div>
   </header>
 
@@ -63,7 +63,7 @@
     <label>평균 출고 기준
       <select name="shipment_period"><option value="3" {{ 'selected' if board.filters.shipment_period==3 }}>최근 3개월</option><option value="6" {{ 'selected' if board.filters.shipment_period==6 }}>최근 6개월</option><option value="12" {{ 'selected' if board.filters.shipment_period==12 }}>최근 12개월 범위</option></select>
     </label>
-    <div class="iv-actions"><button type="submit" class="iv-primary">조회</button><a href="{{ url_for('expiry.dashboard') }}">초기화</a></div>
+    <div class="iv-actions"><button type="submit" class="iv-primary">조회</button><a href="{{ url_for('expiry.dashboard', view='work') if work_mode else url_for('expiry.dashboard') }}">초기화</a></div>
   </form>
 
   {% if work_mode %}
