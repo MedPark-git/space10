@@ -156,7 +156,8 @@ def merge_rows(before, incoming):
 
 
 def stock_index(stock, refs):
-    result = defaultdict(lambda: {'finished':ZERO, 'waiting':ZERO, 'consignment':ZERO, 'factory':'unknown'})
+    result = defaultdict(lambda: {'finished':ZERO, 'work':ZERO, 'waiting':ZERO,
+                                  'consignment':ZERO, 'factory':'unknown'})
     mapping = refs.get('mapping', {})
     payload = getattr(stock, 'payload', stock) if stock is not None else []
     for entry in payload or []:
@@ -174,14 +175,17 @@ def stock_index(stock, refs):
             continue
         warehouse = re.sub(r'\s+', '', clean(raw.get('warehouse'))).casefold()
         location = re.sub(r'\s+', '', clean(raw.get('location'))).casefold()
-        if '완제품창고' not in warehouse and '수탁창고' not in warehouse:
+        is_work = '공정중' in warehouse
+        if '완제품창고' not in warehouse and '수탁창고' not in warehouse and not is_work:
             continue
         mapped = mapping.get(erp) or {}
         code = clean(mapped.get('icube') or raw.get('icube')).upper()
         shown = lookup(code, raw.get('name'), raw.get('spec'), refs=refs)
         fac = factory_for(code, clean(shown.get('name') or raw.get('name')), raw, refs)
         result[erp]['factory'] = fac
-        if '수탁' in warehouse or '수탁' in location:
+        if is_work:
+            result[erp]['work'] += qty
+        elif '수탁' in warehouse or '수탁' in location:
             result[erp]['consignment'] += qty
         elif '출하대기' in location:
             result[erp]['waiting'] += qty
@@ -327,6 +331,25 @@ def allocate_waiting_stock(rows, stock_by_erp):
             waiting -= allocated
 
 
+def allocate_work_stock(rows, stock_by_erp):
+    """Allocate WIP only as projected supply; it never counts as prepared stock."""
+    by_erp = defaultdict(list)
+    for row in rows:
+        row['work_allocated'] = ZERO
+        row['shortage_after_work'] = max(row.get('remaining', ZERO) - row.get('prepared', ZERO), ZERO)
+        if row['shortage_after_work'] > 0:
+            by_erp[row['erp']].append(row)
+    for erp, demands in by_erp.items():
+        work = stock_by_erp[erp]['work']
+        for row in sorted(demands, key=lambda item:(item['date'], item['document'], natural(item['line']))):
+            if work <= 0:
+                break
+            allocated = min(work, row['shortage_after_work'])
+            row['work_allocated'] = allocated
+            row['shortage_after_work'] -= allocated
+            work -= allocated
+
+
 def build_board(orders, quotes, shipments, movements, stock, refs, saved, filters):
     """Build one board from exactly one business document stream."""
     scope = clean(filters.get('scope')) or 'overseas'
@@ -368,6 +391,11 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
         row['prepared'] = ZERO
         row['expected_date'] = clean(progress.get('expected_date'))
         row['note'] = clean(progress.get('note'))
+        completion = refs.get('work_completion', {}).get(row['erp'])
+        if not isinstance(completion, dict):
+            completion = {}
+        row['work_expected_date'] = clean(completion.get('expected_date'))
+        row['work_note'] = clean(completion.get('note'))
         row['status'] = clean(progress.get('status'))
         if scope == 'consignment':
             row['status'], row['shortage'] = '미이동 잔량', None
@@ -391,13 +419,17 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
     period_lines = [row for row in lines if row['remaining'] > 0]
     if scope == 'overseas':
         allocate_waiting_stock(period_lines, stock_by_erp)
+        allocate_work_stock(period_lines, stock_by_erp)
     visible = []
     cutoff_date = date.fromisoformat(cutoff)
     for row in period_lines:
         if scope == 'overseas':
             row['shortage'] = max(row['remaining'] - row['prepared'], ZERO)
             row['status'] = ('준비완료' if row['shortage'] <= 0 else
-                             '일부 준비' if row['prepared'] > 0 else '준비중')
+                             '일부 준비·생산중' if row['prepared'] > 0 and row['work_allocated'] > 0 else
+                             '일부 준비' if row['prepared'] > 0 else
+                             '생산완료 대기' if row['work_allocated'] > 0 and row['shortage_after_work'] <= 0 else
+                             '일부 생산중' if row['work_allocated'] > 0 else '준비중')
         elif scope == 'domestic':
             row['status'], row['shortage'] = '미출고 잔량', None
         due_text = row.get('ship_due') or row.get('due') or ''
@@ -410,10 +442,15 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
             row['priority_key'], row['priority_label'], row['priority_rank'] = 'no_due', '납기 미정', 3
         else:
             row['priority_key'], row['priority_label'], row['priority_rank'] = 'normal', '예정', 4
-        row['schedule_missing'] = scope == 'overseas' and row['shortage'] > 0 and not row['expected_date']
+        row['effective_expected_date'] = (row['work_expected_date']
+            if scope == 'overseas' and row['work_allocated'] > 0 and row['shortage_after_work'] <= 0
+            else row['expected_date'] or row['work_expected_date'])
+        row['schedule_missing'] = (scope == 'overseas' and row['shortage'] > 0 and (
+            (row['work_allocated'] > 0 and not row['work_expected_date']) or
+            (row['shortage_after_work'] > 0 and not row['expected_date'])))
         row['is_ready'] = scope == 'overseas' and row['shortage'] <= 0
-        if scope == 'overseas' and row['shortage'] > 0 and row['expected_date']:
-            expected = date.fromisoformat(row['expected_date'])
+        if scope == 'overseas' and row['shortage'] > 0 and row['effective_expected_date']:
+            expected = date.fromisoformat(row['effective_expected_date'])
             if expected < cutoff_date:
                 row['priority_key'], row['priority_label'], row['priority_rank'] = 'overdue', '예상납기 경과', 0
             elif expected <= cutoff_date + timedelta(days=7) and row['priority_rank'] > 1:
@@ -449,6 +486,7 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
         if group_key not in grouped:
             grouped[group_key] = {'customer':row['customer'],'due':'','dues':set(),'rows':[], 'documents':set(),
                                   'owners':set(),'quantity':ZERO,'prepared':ZERO,'shortage':ZERO,
+                                  'work_allocated':ZERO,'shortage_after_work':ZERO,
                                   'overdue_quantity':ZERO,'schedule_missing':0,'priority_rank':9,
                                   'priority_key':'normal','priority_label':'예정','ready_rows':0}
         group = grouped[group_key]
@@ -462,6 +500,8 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
         group['prepared'] += row['prepared']
         if row['shortage'] is not None:
             group['shortage'] += row['shortage']
+            group['work_allocated'] += row.get('work_allocated', ZERO)
+            group['shortage_after_work'] += row.get('shortage_after_work', row['shortage'])
         if row['priority_key'] == 'overdue':
             group['overdue_quantity'] += row['shortage'] if row['shortage'] is not None else row['remaining']
         if row['schedule_missing']:
@@ -491,6 +531,8 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
             'quantity':sum((g['quantity'] for g in groups),ZERO),
             'prepared':sum((g['prepared'] for g in groups),ZERO),
             'shortage':sum((g['shortage'] for g in groups),ZERO),
+            'work_allocated':sum((g['work_allocated'] for g in groups),ZERO),
+            'shortage_after_work':sum((g['shortage_after_work'] for g in groups),ZERO),
             'overdue_quantity':sum((g['overdue_quantity'] for g in groups),ZERO),
             'overdue_groups':sum(g['priority_key']=='overdue' for g in groups),
             'schedule_missing':sum(g['schedule_missing'] for g in groups),
@@ -562,7 +604,7 @@ def install_order_fulfillment(app, db):
     def refs():
         result = {}
         needed = ('mapping', 'product_factory', 'rules', 'warehouse_classes',
-                  'product_order', 'product_display', 'order_progress')
+                  'product_order', 'product_display', 'order_progress', 'work_completion')
         for row in db.session.scalars(select(Reference).where(
                 Reference.kind.in_(needed)).order_by(Reference.kind, Reference.key)):
             result.setdefault(row.kind, {})[row.key] = row.payload
