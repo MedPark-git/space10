@@ -339,18 +339,22 @@ def install_shipment_analysis(app, db):
         if request.method == 'POST':
             if current_user.role not in {'admin', 'editor'}:
                 abort(403)
+            pasted = request.form.get('shipment_pasted', '').strip()
             upload = request.files.get('shipment_file')
-            if upload is None or not upload.filename:
-                flash('출고현황 파일을 선택해 주세요.', 'error')
-                return redirect(url_for('expiry.shipment_analysis'))
-            raw = upload.stream.read(MAX_FILE_SIZE + 1)
-            if len(raw) > MAX_FILE_SIZE:
-                flash('출고현황 파일은 4MB 이하만 등록할 수 있습니다.', 'error')
-                return redirect(url_for('expiry.shipment_analysis'))
             try:
-                decoded = raw.decode('utf-8-sig')
-                rows, negative = parse_shipments(decoded, upload.filename)
-                detail_rows, _ = parse_shipment_detail(decoded, upload.filename)
+                if pasted:
+                    if len(pasted.encode('utf-8')) > MAX_FILE_SIZE:
+                        raise ValueError('붙여넣은 출고현황은 4MB 이하만 등록할 수 있습니다.')
+                    decoded, source_name = pasted, '복사 붙여넣기'
+                elif upload is not None and upload.filename:
+                    raw = upload.stream.read(MAX_FILE_SIZE + 1)
+                    if len(raw) > MAX_FILE_SIZE:
+                        raise ValueError('출고현황 파일은 4MB 이하만 등록할 수 있습니다.')
+                    decoded, source_name = raw.decode('utf-8-sig'), upload.filename
+                else:
+                    raise ValueError('엑셀에서 제목행을 포함한 출고현황 전체를 복사해 붙여넣어 주세요.')
+                rows, negative = parse_shipments(decoded, source_name)
+                detail_rows, _ = parse_shipment_detail(decoded, source_name)
             except UnicodeDecodeError:
                 flash('UTF-8로 저장된 파일만 등록할 수 있습니다.', 'error')
                 return redirect(url_for('expiry.shipment_analysis'))
@@ -361,14 +365,14 @@ def install_shipment_analysis(app, db):
             db.session.execute(text('SELECT pg_advisory_xact_lock(73190423)'))
             record = Import(
                 id=str(uuid.uuid4()), kind='shipment', payload=rows,
-                notes={'filename': upload.filename, 'rows': len(rows), 'negative_rows': negative},
+                notes={'filename': source_name, 'rows': len(rows), 'negative_rows': negative},
                 base_revision='shipment-v1', as_of=as_of,
                 created_by=current_user.id, committed_at=datetime.now(timezone.utc))
             db.session.add(record)
             if detail_rows is not None:
                 detail_record = Import(
                     id=str(uuid.uuid4()), kind='shipment_detail', payload=detail_rows,
-                    notes={'filename': upload.filename, 'rows': len(detail_rows), 'negative_rows': negative},
+                    notes={'filename': source_name, 'rows': len(detail_rows), 'negative_rows': negative},
                     base_revision='shipment-detail-v1', as_of=as_of,
                     created_by=current_user.id, committed_at=datetime.now(timezone.utc))
                 db.session.add(detail_record)
