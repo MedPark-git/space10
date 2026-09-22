@@ -15,7 +15,7 @@ from flask import abort, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import select, text
 
-from inventory_spec_view import clean, factory_for, natural, product_family
+from inventory_spec_view import clean, factory_for, natural, product_family, work_completion_key
 from product_display_master import lookup
 
 ZERO = Decimal('0')
@@ -157,7 +157,7 @@ def merge_rows(before, incoming):
 
 def stock_index(stock, refs):
     result = defaultdict(lambda: {'finished':ZERO, 'work':ZERO, 'waiting':ZERO,
-                                  'consignment':ZERO, 'factory':'unknown'})
+                                  'consignment':ZERO, 'factory':'unknown', 'work_lots':{}})
     mapping = refs.get('mapping', {})
     payload = getattr(stock, 'payload', stock) if stock is not None else []
     for entry in payload or []:
@@ -185,12 +185,26 @@ def stock_index(stock, refs):
         result[erp]['factory'] = fac
         if is_work:
             result[erp]['work'] += qty
+            lot = clean(raw.get('lot'))
+            result[erp]['work_lots'][lot] = result[erp]['work_lots'].get(lot, ZERO) + qty
         elif '수탁' in warehouse or '수탁' in location:
             result[erp]['consignment'] += qty
         elif '출하대기' in location:
             result[erp]['waiting'] += qty
         else:
             result[erp]['finished'] += qty
+    schedules = refs.get('work_completion', {})
+    for erp, item in result.items():
+        plans = []
+        for lot, qty in item['work_lots'].items():
+            payload = schedules.get(work_completion_key(erp, lot)) or schedules.get(erp) or {}
+            if not isinstance(payload, dict):
+                payload = {}
+            plans.append(dict(lot=lot, quantity=qty,
+                              expected_date=clean(payload.get('expected_date')),
+                              note=clean(payload.get('note'))))
+        item['work_plans'] = sorted(plans, key=lambda plan: (
+            plan['expected_date'] or '9999-12-31', natural(plan['lot'])))
     return result
 
 
@@ -336,18 +350,25 @@ def allocate_work_stock(rows, stock_by_erp):
     by_erp = defaultdict(list)
     for row in rows:
         row['work_allocated'] = ZERO
+        row['work_allocations'] = []
         row['shortage_after_work'] = max(row.get('remaining', ZERO) - row.get('prepared', ZERO), ZERO)
         if row['shortage_after_work'] > 0:
             by_erp[row['erp']].append(row)
     for erp, demands in by_erp.items():
-        work = stock_by_erp[erp]['work']
+        plans = [dict(plan) for plan in stock_by_erp[erp].get('work_plans', [])]
         for row in sorted(demands, key=lambda item:(item['date'], item['document'], natural(item['line']))):
-            if work <= 0:
-                break
-            allocated = min(work, row['shortage_after_work'])
-            row['work_allocated'] = allocated
-            row['shortage_after_work'] -= allocated
-            work -= allocated
+            for plan in plans:
+                if row['shortage_after_work'] <= 0:
+                    break
+                if plan['quantity'] <= 0:
+                    continue
+                allocated = min(plan['quantity'], row['shortage_after_work'])
+                row['work_allocated'] += allocated
+                row['shortage_after_work'] -= allocated
+                plan['quantity'] -= allocated
+                row['work_allocations'].append(dict(
+                    lot=plan['lot'], quantity=allocated,
+                    expected_date=plan['expected_date'], note=plan['note']))
 
 
 def build_board(orders, quotes, shipments, movements, stock, refs, saved, filters):
@@ -391,11 +412,9 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
         row['prepared'] = ZERO
         row['expected_date'] = clean(progress.get('expected_date'))
         row['note'] = clean(progress.get('note'))
-        completion = refs.get('work_completion', {}).get(row['erp'])
-        if not isinstance(completion, dict):
-            completion = {}
-        row['work_expected_date'] = clean(completion.get('expected_date'))
-        row['work_note'] = clean(completion.get('note'))
+        row['work_expected_date'] = ''
+        row['work_completion_label'] = ''
+        row['work_note'] = ''
         row['status'] = clean(progress.get('status'))
         if scope == 'consignment':
             row['status'], row['shortage'] = '미이동 잔량', None
@@ -424,6 +443,14 @@ def build_board(orders, quotes, shipments, movements, stock, refs, saved, filter
     cutoff_date = date.fromisoformat(cutoff)
     for row in period_lines:
         if scope == 'overseas':
+            allocation_dates = sorted({item['expected_date'] for item in row['work_allocations']
+                                       if item['expected_date']})
+            row['work_expected_date'] = allocation_dates[0] if allocation_dates else ''
+            row['work_note'] = ' / '.join(dict.fromkeys(
+                item['note'] for item in row['work_allocations'] if item['note']))
+            row['work_completion_label'] = ' · '.join(
+                f"{item['lot'] or 'LOT 미등록'} {item['expected_date'] or '일정 미등록'} ({number(item['quantity']):g} EA)"
+                for item in row['work_allocations'])
             row['shortage'] = max(row['remaining'] - row['prepared'], ZERO)
             row['status'] = ('준비완료' if row['shortage'] <= 0 else
                              '일부 준비·생산중' if row['prepared'] > 0 and row['work_allocated'] > 0 else
