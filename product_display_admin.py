@@ -99,25 +99,46 @@ def markdown_file(items):
     return '\n'.join(output) + '\n'
 
 
+def submitted_master():
+    """Read an Excel/markdown table pasted into the form; file input remains backward-compatible."""
+    pasted = request.form.get('pasted', '').strip()
+    if pasted:
+        if len(pasted.encode('utf-8')) > MAX_FILE_SIZE:
+            raise ValueError('붙여넣은 기준표는 2MB 이하만 등록할 수 있습니다.')
+        return pasted, '복사 붙여넣기'
+    upload = request.files.get('master_file')
+    if upload is None or not upload.filename:
+        raise ValueError('엑셀에서 제목행을 포함해 복사한 뒤 붙여넣어 주세요.')
+    raw = upload.stream.read(MAX_FILE_SIZE + 1)
+    if len(raw) > MAX_FILE_SIZE:
+        raise ValueError('기준표 파일은 2MB 이하만 등록할 수 있습니다.')
+    try:
+        return raw.decode('utf-8-sig'), upload.filename
+    except UnicodeDecodeError as exc:
+        raise ValueError('UTF-8로 저장된 파일만 등록할 수 있습니다.') from exc
+
+
+def merged_master(references, incoming):
+    current, _ = current_items(references())
+    mode = request.form.get('mode', 'merge')
+    if mode not in {'merge', 'replace'}:
+        mode = 'merge'
+    items = {} if mode == 'replace' else dict(current)
+    added = sum(code not in current for code in incoming)
+    changed = len(incoming) - added
+    items.update(incoming)
+    return items, mode, added, changed
+
+
 def register_product_display_admin(bp, db, audit, roles, Reference, references, lock_writes):
     @bp.route('/product-display-master', methods=['GET', 'POST'])
     @roles('admin', 'editor')
     def product_display_master():
         if request.method == 'POST':
-            upload = request.files.get('master_file')
-            if upload is None or not upload.filename:
-                flash('수정한 기준표 파일을 선택해 주세요.', 'error')
-                return redirect(url_for('expiry.product_display_master'))
-            raw = upload.stream.read(MAX_FILE_SIZE + 1)
-            if len(raw) > MAX_FILE_SIZE:
-                flash('기준표 파일은 2MB 이하만 등록할 수 있습니다.', 'error')
-                return redirect(url_for('expiry.product_display_master'))
             try:
-                text = raw.decode('utf-8-sig')
-                items = parse_master(text, upload.filename)
-            except UnicodeDecodeError:
-                flash('UTF-8로 저장된 파일만 등록할 수 있습니다.', 'error')
-                return redirect(url_for('expiry.product_display_master'))
+                content, source_name = submitted_master()
+                incoming = parse_master(content, source_name)
+                items, mode, added, changed = merged_master(references, incoming)
             except ValueError as error:
                 flash(str(error), 'error')
                 return redirect(url_for('expiry.product_display_master'))
@@ -130,14 +151,15 @@ def register_product_display_admin(bp, db, audit, roles, Reference, references, 
             row.payload = {
                 'items': items,
                 'count': len(items),
-                'filename': upload.filename,
+                'filename': source_name,
+                'mode': mode,
                 'updated_at': datetime.now(timezone.utc).isoformat(),
             }
             row.updated_by = current_user.id
             row.updated_at = datetime.now(timezone.utc)
             audit('product_display_master_updated', detail=f'{len(items)} items', commit=False)
             db.session.commit()
-            flash(f'제품 표시 기준표 {len(items):,}건을 적용했습니다.', 'success')
+            flash(f'제품 기준표를 적용했습니다. 신규 {added:,}건 · 수정 {changed:,}건 · 전체 {len(items):,}건', 'success')
             return redirect(url_for('expiry.product_display_master'))
         refs = references()
         items, payload = current_items(refs)
@@ -177,19 +199,10 @@ def install_product_display_admin(app, db):
     def master_view():
         require_editor()
         if request.method == 'POST':
-            upload = request.files.get('master_file')
-            if upload is None or not upload.filename:
-                flash('수정한 기준표 파일을 선택해 주세요.', 'error')
-                return redirect(url_for('expiry.product_display_master'))
-            raw = upload.stream.read(MAX_FILE_SIZE + 1)
-            if len(raw) > MAX_FILE_SIZE:
-                flash('기준표 파일은 2MB 이하만 등록할 수 있습니다.', 'error')
-                return redirect(url_for('expiry.product_display_master'))
             try:
-                items = parse_master(raw.decode('utf-8-sig'), upload.filename)
-            except UnicodeDecodeError:
-                flash('UTF-8로 저장된 파일만 등록할 수 있습니다.', 'error')
-                return redirect(url_for('expiry.product_display_master'))
+                content, source_name = submitted_master()
+                incoming = parse_master(content, source_name)
+                items, mode, added, changed = merged_master(references, incoming)
             except ValueError as error:
                 flash(str(error), 'error')
                 return redirect(url_for('expiry.product_display_master'))
@@ -202,14 +215,15 @@ def install_product_display_admin(app, db):
             row.payload = {
                 'items': items,
                 'count': len(items),
-                'filename': upload.filename,
+                'filename': source_name,
+                'mode': mode,
                 'updated_at': datetime.now(timezone.utc).isoformat(),
             }
             row.updated_by = current_user.id
             row.updated_at = datetime.now(timezone.utc)
             db.session.commit()
             app.logger.info('PRODUCT_DISPLAY_MASTER_UPDATED user=%s items=%s', current_user.id, len(items))
-            flash(f'제품 표시 기준표 {len(items):,}건을 적용했습니다.', 'success')
+            flash(f'제품 기준표를 적용했습니다. 신규 {added:,}건 · 수정 {changed:,}건 · 전체 {len(items):,}건', 'success')
             return redirect(url_for('expiry.product_display_master'))
         items, payload = current_items(references())
         preview = [dict(code=code, **row) for code, row in list(items.items())[:30]]
