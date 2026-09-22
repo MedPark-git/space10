@@ -3,10 +3,11 @@
 {% block breadcrumb %}공장별 제품 · 구분 · 타입 · 규격별 재고{% endblock %}
 {% block content %}
 {% set capture_mode = request.args.get('capture') == '1' %}
+{% set work_mode = request.args.get('view') == 'work' %}
 {% if capture_mode %}
 {% include 'inventory_print.html' %}
 {% else %}
-<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260922-10') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='inventory_specs.css', v='20260922-11') }}">
 <style>
 /* Keep application-header rules out of the nested inventory headings. */
 .app .ivdash .iv-hero {height:auto;min-height:0;background:linear-gradient(135deg,#163f63,#2d6f99);padding:16px 20px;border:0}
@@ -19,7 +20,7 @@
 .iv-action-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:10px 0}.iv-action{padding:10px;border:1px solid #c2d0d9;border-left:4px solid #54788d;border-radius:6px;background:#fff}.iv-action.critical{border-left-color:#bd323b}.iv-action.watch{border-left-color:#d18b1c}.iv-action.excess{border-left-color:#7661a5}.iv-action.data{border-left-color:#667984}.iv-action span{font-size:11px;color:#536976}.iv-action b{display:block;margin:3px 0;font-size:18px}.iv-action small{display:block;line-height:1.35;color:#667984}.iv-family{margin:12px 0 18px;border:2px solid #aec0cb;border-radius:7px;overflow:hidden;background:#f8fafb}.iv-family-head{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 11px;background:#dfeaf1;border-bottom:1px solid #afc1cc}.iv-family-head h3{margin:0;font-size:16px;color:#173f5a}.iv-family-head span{font-size:11px;text-align:right}.iv-family-body{padding:8px}.iv-management{display:inline-block;padding:3px 6px;border-radius:4px;background:#e8f3ed;color:#255d43;font-size:10px;font-weight:900}.iv-management.stockout,.iv-management.critical{background:#fff0f0;color:#a02d35}.iv-management.watch{background:#fff5dc;color:#875807}.iv-management.excess,.iv-management.no_demand{background:#f2edfa;color:#674c90}.iv-management.location{background:#fff1e5;color:#9b4e12}
 @media(max-width:1100px){.iv-kpis.iv-six{grid-template-columns:repeat(3,1fr)}.iv-action-grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:700px){.iv-kpis.iv-six,.iv-action-grid{grid-template-columns:repeat(2,1fr)}}
 </style>
-<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260922-10">
+<div class="ivdash" data-money="{{ 'on' if board and board.filters.show_value else 'off' }}" data-capture="{{ 'on' if capture_mode else 'off' }}" data-release="inventory-specs-20260922-11">
   <header class="iv-hero">
     <div>
       <p class="iv-eyebrow">MEDPARK INVENTORY</p>
@@ -27,13 +28,14 @@
       <p>완제품창고 재고 + 공정중창고 재고를 가용재고로 보고, 제품별 상세 재고를 확인합니다.</p>
     </div>
     <div class="iv-hero-side"><div class="iv-date">재고 기준일<strong>{{ board.snapshot_date if board else '-' }}</strong></div>
-      {% if board %}<div class="iv-print-actions"><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">3공장 인쇄</a></div>{% endif %}
+      {% if board %}<div class="iv-print-actions"><a class="{{ 'iv-mode-on' if work_mode }}" href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, view='work', product_factory=board.filters.product_factory, shipment_period=board.filters.shipment_period) }}">공정중 일정입력</a>{% if work_mode %}<a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory=board.filters.product_factory, shipment_period=board.filters.shipment_period) }}">전체 재고현황</a>{% endif %}<a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='12', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">1·2공장 인쇄</a><a href="{{ url_for('expiry.dashboard', snapshot=snapshot_id, product_factory='3', shipment_period=board.filters.shipment_period, show_value='1' if board.filters.show_value else None, capture='1') }}">3공장 인쇄</a></div>{% endif %}
     </div>
   </header>
 
   {% if board %}
   <form class="iv-filters" method="get" id="iv-filter-form">
     {% if snapshot_id %}<input type="hidden" name="snapshot" value="{{ snapshot_id }}">{% endif %}
+    {% if work_mode %}<input type="hidden" name="view" value="work">{% endif %}
     <label class="iv-search">검색<input name="q" value="{{ board.filters.q }}" placeholder="제품명, 국내/CE, 타입, 규격"></label>
     <label>제품 공장
       <select name="product_factory">
@@ -63,6 +65,16 @@
     </label>
     <div class="iv-actions"><button type="submit" class="iv-primary">조회</button><a href="{{ url_for('expiry.dashboard') }}">초기화</a></div>
   </form>
+
+  {% if work_mode %}
+  <section class="iv-work-board">
+    <header class="iv-work-board-head"><div><p>PRODUCTION COMPLETION</p><h2>공정중 재고 예상완료일 입력</h2><span>공정중 재고가 있는 제품만 모았습니다. 입력한 날짜는 수주·출하관리의 생산예정일에 자동 반영됩니다.</span></div><div><b>{{ board.work_total|iv_qty }} EA</b><span>{{ board.work_schedule|length }}개 규격 · 일정 미등록 {{ board.work_missing }}건</span></div></header>
+    {% if board.work_schedule %}<div class="iv-work-table-wrap"><table class="iv-work-schedule-table"><thead><tr><th>공장</th><th>제품</th><th>구분·타입</th><th>규격</th><th>품번</th><th>공정중 수량</th><th>공정중 창고·장소</th><th>예상완료일</th></tr></thead><tbody>
+      {% set ns=namespace(product='') %}{% for r in board.work_schedule %}<tr class="{{ 'iv-work-product-start' if ns.product != r.factory ~ '|' ~ r.product }}"><td><span class="iv-factory-chip">{{ r.factory }}</span></td><td><b>{{ r.product }}</b><small>{{ r.family }}</small></td><td>{{ r.category }}<small>{{ r.type }}</small></td><td><b>{{ r.size }}</b></td><td>{% if r.erps %}{{ r.erps|join(' / ') }}{% else %}<span class="iv-warning">품번 확인</span>{% endif %}</td><td class="iv-work-quantity">{{ r.quantity|iv_qty }}<small>EA</small></td><td>{% for p in r.locations %}<span class="iv-location-line">{{ p.warehouse }} · {{ p.place }} <b>{{ p.quantity|iv_qty }}</b></span>{% endfor %}</td><td>{% if r.erps and can_edit %}<form method="post" action="{{ url_for('expiry.work_completion') }}" class="iv-work-date-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">{% for erp in r.erps %}<input type="hidden" name="erp" value="{{ erp }}">{% endfor %}<input type="hidden" name="snapshot" value="{{ snapshot_id }}"><input type="hidden" name="product_factory" value="{{ board.filters.product_factory }}"><input type="hidden" name="shipment_period" value="{{ board.filters.shipment_period }}"><input type="hidden" name="view" value="work"><input type="date" name="expected_date" value="{{ r.completion.expected_date }}"><button>저장</button></form>{% else %}<span class="iv-completion-date {{ 'missing' if not r.completion.dates }}">{{ r.completion.label }}</span>{% endif %}{% if not r.completion.dates %}<small class="iv-warning">일정 미등록</small>{% endif %}</td></tr>{% set ns.product=r.factory ~ '|' ~ r.product %}{% endfor %}
+    </tbody></table></div>{% else %}<div class="iv-empty">현재 조회 조건에 해당하는 공정중 재고가 없습니다.</div>{% endif %}
+  </section>
+  <p class="iv-footnote">공정중 수량이 완제품으로 전환되면 이 목록에서 자동으로 제외됩니다. 저장된 일정 기록은 유지되며, 출하대기실로 이동된 수량만 수주·출하관리에서 준비완료로 판정됩니다.</p>
+  {% else %}
 
   {% macro money(t) -%}
     {% if t.total==0 or t.costed_quantity %}
@@ -251,10 +263,11 @@
 
   {% if not board.sections %}<section class="iv-empty">조회 조건에 맞는 재고가 없습니다.</section>{% endif %}
   <p class="iv-footnote">가용재고는 완제품창고 재고와 공정중창고 재고의 합계입니다. 공정중 예상완료일은 수주·출하관리에도 동일하게 적용되며, 공정중수량이 없어지면 현재 화면에서는 자동으로 숨겨집니다.</p>
+  {% endif %}
   {% else %}
   <section class="iv-empty">등록된 ERP 재고가 없습니다.</section>
   {% endif %}
 </div>
-<script src="{{ url_for('static', filename='inventory_specs.js', v='20260922-10') }}" defer></script>
+<script src="{{ url_for('static', filename='inventory_specs.js', v='20260922-11') }}" defer></script>
 {% endif %}
 {% endblock %}
