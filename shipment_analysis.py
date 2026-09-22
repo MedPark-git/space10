@@ -21,7 +21,7 @@ from product_display_master import lookup
 from shipment_seed import ROWS as SEED_ROWS
 
 ZERO = Decimal('0')
-MAX_FILE_SIZE = 4 * 1024 * 1024
+MAX_FILE_SIZE = 8 * 1024 * 1024
 DETAIL_HEADER = ['출고일자','출고번호','순번','고객','납품처','거래구분','출고구분','과세구분','단가구분',
                  '환율','배송방법','담당자','비고(건)','품번','품명','규격','관리단위','출고수량']
 
@@ -344,17 +344,27 @@ def install_shipment_analysis(app, db):
             try:
                 if pasted:
                     if len(pasted.encode('utf-8')) > MAX_FILE_SIZE:
-                        raise ValueError('붙여넣은 출고현황은 4MB 이하만 등록할 수 있습니다.')
-                    decoded, source_name = pasted, '복사 붙여넣기'
+                        raise ValueError('붙여넣은 아마란스 출고현황은 8MB 이하만 등록할 수 있습니다.')
+                    decoded, source_name = pasted, '아마란스 복사 붙여넣기'
                 elif upload is not None and upload.filename:
                     raw = upload.stream.read(MAX_FILE_SIZE + 1)
                     if len(raw) > MAX_FILE_SIZE:
-                        raise ValueError('출고현황 파일은 4MB 이하만 등록할 수 있습니다.')
+                        raise ValueError('출고현황 파일은 8MB 이하만 등록할 수 있습니다.')
                     decoded, source_name = raw.decode('utf-8-sig'), upload.filename
                 else:
-                    raise ValueError('엑셀에서 제목행을 포함한 출고현황 전체를 복사해 붙여넣어 주세요.')
-                rows, negative = parse_shipments(decoded, source_name)
-                detail_rows, _ = parse_shipment_detail(decoded, source_name)
+                    raise ValueError('아마란스에서 제목행을 포함한 출고현황 전체를 복사해 붙여넣어 주세요.')
+                # The Amaranth detail export can contain tens of thousands of rows.
+                # Parse it once, then build the monthly aggregate from that result.
+                detail_rows, detail_negative = parse_shipment_detail(decoded, source_name)
+                if detail_rows is not None:
+                    grouped = defaultdict(Decimal)
+                    for detail in detail_rows:
+                        grouped[(date.fromisoformat(detail['date']), detail['erp'])] += number(detail['quantity'])
+                    rows = [dict(date=day.isoformat(), erp=erp, quantity=str(quantity))
+                            for (day, erp), quantity in sorted(grouped.items())]
+                    negative = detail_negative
+                else:
+                    rows, negative = parse_shipments(decoded, source_name)
             except UnicodeDecodeError:
                 flash('UTF-8로 저장된 파일만 등록할 수 있습니다.', 'error')
                 return redirect(url_for('expiry.shipment_analysis'))
