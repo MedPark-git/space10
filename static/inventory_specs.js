@@ -21,6 +21,7 @@
   const money = document.getElementById('iv-money');
   money?.addEventListener('change', () => {
     board.dataset.money = money.checked ? 'on' : 'off';
+    document.getElementById('iv-filter-form')?.requestSubmit();
   });
 
   document.getElementById('iv-all-warehouses')?.addEventListener('click', () => {
