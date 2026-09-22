@@ -44,24 +44,39 @@ def display(value):
     return re.sub(r'\s+', ' ', re.sub(r'\\([~*])', r'\1', clean(value))).replace('*', '×')
 
 
-def completion_summary(erps, refs):
-    """Return the active WIP completion schedule shared with order fulfillment."""
+def work_completion_key(erp, lot=''):
+    """Stable reference key. Legacy ERP-only records remain valid as fallback."""
+    return f'{clean(erp)}|LOT|{clean(lot)}' if clean(lot) else clean(erp)
+
+
+def completion_summary(items, refs):
+    """Return WIP schedules without exposing LOT detail on the normal dashboard."""
     schedules = refs.get('work_completion', {})
     dates = []
     notes = []
-    for erp in sorted(erps, key=natural):
-        payload = schedules.get(erp)
+    normalized = []
+    for item in items:
+        if isinstance(item, dict):
+            current = dict(item)
+        else:
+            current = {'erp': clean(item), 'lot': '', 'quantity': ZERO}
+        current['erp'], current['lot'] = clean(current.get('erp')), clean(current.get('lot'))
+        current['key'] = work_completion_key(current['erp'], current['lot'])
+        payload = schedules.get(current['key']) or schedules.get(current['erp'])
         if not isinstance(payload, dict):
-            continue
+            payload = {}
         expected = clean(payload.get('expected_date'))
+        current['expected_date'] = expected
+        current['note'] = clean(payload.get('note'))
+        normalized.append(current)
         if expected:
             dates.append(expected)
-        note = clean(payload.get('note'))
-        if note:
-            notes.append(note)
+        if current['note']:
+            notes.append(current['note'])
     dates = sorted(set(dates))
     return dict(
-        erps=sorted(erps, key=natural),
+        items=sorted(normalized, key=lambda item: (natural(item['erp']), natural(item['lot']))),
+        erps=sorted({item['erp'] for item in normalized if item['erp']}, key=natural),
         dates=dates,
         expected_date=dates[0] if dates else '',
         label=(dates[0] + (f' 외 {len(dates)-1}건' if len(dates) > 1 else '')) if dates else '일정 미등록',
@@ -264,7 +279,8 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
         cost_data = costs.get(code)
         source_rows.append(dict(name=name, family=product_family(name), type=type_name, size=size, category=category,
             original_spec=original_spec, erp=erp, icube=code, mapped=bool(shown.get('mapped')),
-            factory=factory, quantity=quantity, warehouse=clean(raw.get('warehouse')) or '창고 미지정',
+            factory=factory, quantity=quantity, lot=clean(raw.get('lot')),
+            warehouse=clean(raw.get('warehouse')) or '창고 미지정',
             place=clean(raw.get('location')) or '장소 미지정', bucket=bucket, physical=physical,
             location_exception=exception, cost=cost_data[1] if cost_data else None,
             cost_month=cost_data[0] if cost_data else None))
@@ -298,10 +314,14 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
             line_key += (row['icube'] or row['erp'],)
             unmapped.add(row['icube'] or row['erp'])
         line = group['lines'].setdefault(line_key, dict(category=row['category'], type=row['type'], size=row['size'],
-            original_specs=set(), places={}, monthly_shipment=ZERO, shipment_erps=set(), work_erps=set(), **totals()))
+            original_specs=set(), places={}, monthly_shipment=ZERO, shipment_erps=set(), work_items={}, **totals()))
         add_total(line, row)
         if row['physical'].startswith('work') and row['erp']:
-            line['work_erps'].add(row['erp'])
+            work_key = (row['erp'], row['lot'], row['warehouse'], row['place'])
+            item = line['work_items'].setdefault(work_key, dict(
+                erp=row['erp'], lot=row['lot'], warehouse=row['warehouse'],
+                place=row['place'], quantity=ZERO))
+            item['quantity'] += row['quantity']
         if row['erp'] and row['erp'] not in line['shipment_erps']:
             line['monthly_shipment'] += shipment_averages.get(row['erp'], ZERO)
             line['shipment_erps'].add(row['erp'])
@@ -331,7 +351,7 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
             lines = list(group.pop('lines').values())
             for line in lines:
                 line.pop('shipment_erps', None)
-                line['completion'] = completion_summary(line.pop('work_erps'), refs)
+                line['completion'] = completion_summary(line.pop('work_items').values(), refs)
                 line['coverage_months'] = line['available'] / line['monthly_shipment'] if line['monthly_shipment'] > 0 else None
                 line['management_key'], line['management_label'] = management_status(
                     line['available'], line['monthly_shipment'], line['coverage_months'], line['location_exception'])
@@ -421,16 +441,24 @@ def build_board(entries, refs, filters, snapshot_date, shipment_averages=None):
             for row in group['rows']:
                 if row['available_work'] <= 0:
                     continue
-                work_locations = [location for location in row['locations']
-                                  if '공정중' in location['warehouse']]
-                work_schedule.append(dict(
-                    factory=section['label'], family=group['family'], product=group['name'],
-                    category=row['category'], type=row['type'], size=row['size'],
-                    quantity=row['available_work'], locations=work_locations,
-                    completion=row['completion'], erps=row['completion']['erps']))
+                by_lot = {}
+                for item in row['completion']['items']:
+                    key = (item['erp'], item['lot'])
+                    scheduled = by_lot.setdefault(key, dict(
+                        factory=section['label'], family=group['family'], product=group['name'],
+                        category=row['category'], type=row['type'], size=row['size'],
+                        erp=item['erp'], lot=item['lot'], quantity=ZERO, locations=[],
+                        completion=completion_summary([item], refs)))
+                    scheduled['quantity'] += item.get('quantity', ZERO)
+                    scheduled['locations'].append(dict(
+                        warehouse=item.get('warehouse') or '창고 미지정',
+                        place=item.get('place') or '장소 미지정',
+                        quantity=item.get('quantity', ZERO)))
+                work_schedule.extend(by_lot.values())
     work_schedule.sort(key=lambda row: (
         natural(row['factory']), natural(row['family']), natural(row['product']),
-        category_key(row['category']), natural(row['type']), natural(row['size'])))
+        category_key(row['category']), natural(row['type']), natural(row['size']),
+        natural(row['erp']), natural(row['lot'])))
     return dict(filters=selected, sections=sections, metrics=overall, warehouses=warehouses,
                 invalid_rows=invalid_rows, excluded_rows=excluded_rows, missing_cost=len(missing_cost),
                 unmapped=len(unmapped), source_rows=len(rows), snapshot_date=snapshot_date,
@@ -456,7 +484,10 @@ def install_inventory_spec_view(app, db):
         if current_user.role not in {'admin', 'editor'}:
             abort(403)
         erps = list(dict.fromkeys(clean(value) for value in request.form.getlist('erp') if clean(value)))
-        if not erps or len(erps) > 30 or any(len(erp) > 100 for erp in erps):
+        keys = list(dict.fromkeys(clean(value) for value in request.form.getlist('completion_key') if clean(value)))
+        if not keys:
+            keys = erps
+        if not keys or len(keys) > 30 or any(len(key) > 220 for key in keys):
             abort(400)
         expected_date = clean(request.form.get('expected_date'))
         if expected_date:
@@ -467,18 +498,19 @@ def install_inventory_spec_view(app, db):
                 return redirect(url_for('expiry.dashboard'))
         note = clean(request.form.get('note'))[:300]
         now = datetime.now(timezone.utc)
-        for erp in erps:
+        for key in keys:
             row = db.session.scalar(select(Reference).where(
-                Reference.kind == 'work_completion', Reference.key == erp))
+                Reference.kind == 'work_completion', Reference.key == key))
             if row is None:
-                row = Reference(kind='work_completion', key=erp, payload={},
+                row = Reference(kind='work_completion', key=key, payload={},
                                 updated_by=current_user.id, updated_at=now)
                 db.session.add(row)
-            row.payload = {'expected_date': expected_date, 'note': note}
+            row.payload = {'expected_date': expected_date, 'note': note,
+                           'erp': clean(request.form.get('erp')), 'lot': clean(request.form.get('lot'))}
             row.updated_by = current_user.id
             row.updated_at = now
         db.session.commit()
-        flash(f'공정중 예상완료일을 {len(erps)}개 품번에 적용했습니다.', 'success')
+        flash(f'공정중 예상완료일을 {len(keys)}개 LOT에 적용했습니다.', 'success')
         target = {'snapshot': clean(request.form.get('snapshot')),
                   'product_factory': clean(request.form.get('product_factory')),
                   'shipment_period': clean(request.form.get('shipment_period')) or '6',
