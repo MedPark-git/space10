@@ -211,6 +211,20 @@ def initialize_database():
                 admin = User(login_id=admin_id.casefold(), name=admin_name, role="admin", must_change_password=True)
                 admin.set_password(admin_password)
                 db.session.add(admin)
+        editor_id = (os.getenv("BOOTSTRAP_EDITOR_ID") or "").strip().casefold()
+        editor_password = os.getenv("BOOTSTRAP_EDITOR_PASSWORD")
+        if editor_id and editor_password and not db.session.scalar(
+            select(User).where(func.lower(User.login_id) == editor_id)
+        ):
+            editor = User(
+                login_id=editor_id,
+                name=os.getenv("BOOTSTRAP_EDITOR_NAME", "재고관리 실무자"),
+                department=os.getenv("BOOTSTRAP_EDITOR_DEPARTMENT", "재고관리"),
+                role="editor",
+                must_change_password=True,
+            )
+            editor.set_password(editor_password)
+            db.session.add(editor)
         db.session.commit()
     except SQLAlchemyError:
         db.session.rollback()
